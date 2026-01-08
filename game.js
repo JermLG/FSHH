@@ -1136,7 +1136,7 @@ class Game {
         Input.init();
 
         // Load sprites
-        SpriteLoader.load('player', 'sprites/player.png');
+        SpriteLoader.load('player', 'Sprites/Player.png');
 
         // Game objects
         this.camera = new Camera();
