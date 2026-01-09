@@ -163,6 +163,71 @@ const CONFIG = {
         LIFETIME: 5000,          // ms before bullet disappears
     },
 
+    // Piranha swarm settings (boids flocking)
+    PIRANHA: {
+        SPRITE_SIZE: 32,
+        WIDTH: 48,                    // Rendered size (32 * 1.5)
+        HEIGHT: 48,
+        SWARM_SIZE_MIN: 8,
+        SWARM_SIZE_MAX: 12,
+        // Speeds
+        WANDER_SPEED: 2,
+        CHASE_SPEED: 5.5,             // Faster than player (5) - must dash to escape!
+        // Boids parameters
+        SEPARATION_RADIUS: 25,
+        ALIGNMENT_RADIUS: 50,
+        COHESION_RADIUS: 70,
+        SEPARATION_WEIGHT: 1.5,
+        ALIGNMENT_WEIGHT: 1.0,
+        COHESION_WEIGHT: 1.0,
+        PLAYER_WEIGHT: 2.5,           // Strong pull toward player when chasing
+        // Behavior timing
+        CHASE_TRIGGER_RANGE: 150,     // Distance to trigger chase
+        CHASE_DURATION_MIN: 3000,     // Chase for 3-5 seconds
+        CHASE_DURATION_MAX: 5000,
+        // Damage
+        CONTACT_DAMAGE: 5,
+        DAMAGE_COOLDOWN: 800,         // Per-piranha cooldown
+        // Spawning
+        MIN_DEPTH: 500,               // 50m depth
+        MAX_SWARMS: 2,
+        SPAWN_INTERVAL: 10000,        // 10 seconds between spawns
+        SPAWN_MARGIN: 100,            // Distance offscreen to spawn
+    },
+
+    // Main menu settings
+    MENU: {
+        // Title sprite (128x64, render at 3x)
+        TITLE_SPRITE_WIDTH: 128,
+        TITLE_SPRITE_HEIGHT: 64,
+        TITLE_SCALE: 3,
+        TITLE_Y: 80,
+        // Play button (32x16, render at 3x)
+        BUTTON_SPRITE_WIDTH: 32,
+        BUTTON_SPRITE_HEIGHT: 16,
+        BUTTON_SCALE: 3,
+        BUTTON_Y: 320,
+        // Menu player patrol behavior
+        PLAYER_WALK_SPEED: 1.5,
+        PLAYER_PATROL_PAUSE: 1000,
+    },
+
+    // Intro cutscene settings
+    INTRO: {
+        FALL_GRAVITY: 0.3,
+        FALL_MAX_SPEED: 8,
+        WATER_SURFACE_Y: 50,          // Same as WORLD_TOP_BOUNDARY
+        SPLASH_PARTICLES: 20,
+        DURATION: 2500,               // ms before gameplay starts
+    },
+
+    // Screen shake settings
+    SCREEN_SHAKE: {
+        DAMAGE_INTENSITY: 8,          // Pixels of shake on damage
+        DAMAGE_DURATION: 200,         // ms duration of shake
+        DECAY: 0.9,                   // How fast shake decays
+    },
+
     // Audio settings
     AUDIO: {
         BGM_PATH: 'Audio/FSHHH_JLG.wav',
@@ -213,6 +278,17 @@ const CONFIG = {
         PARTICLES_BUBBLE: '#88ccff',
         PARTICLES_DASH: '#66ffff',
     }
+};
+
+// =============================================================================
+// GAME STATE ENUM
+// =============================================================================
+
+const GameState = {
+    MENU: 'menu',           // Main menu with title and play button
+    INTRO: 'intro',         // Intro cutscene - player falling into water
+    PLAYING: 'playing',     // Normal gameplay
+    GAME_OVER: 'game_over', // Game over screen
 };
 
 // =============================================================================
@@ -540,6 +616,11 @@ class Camera {
         this.x = 0;  // Fixed at 0 since player is constrained horizontally
         this.y = 0;
         this.targetY = 0;
+
+        // Screen shake
+        this.shakeIntensity = 0;
+        this.shakeOffsetX = 0;
+        this.shakeOffsetY = 0;
     }
 
     /**
@@ -560,12 +641,52 @@ class Camera {
 
         // Smoothly interpolate to target position
         this.y = Utils.lerp(this.y, this.targetY, CONFIG.CAMERA.SMOOTHING);
+
+        // Update screen shake
+        this.updateShake();
     }
 
     /**
-     * Convert world coordinates to screen coordinates
+     * Start screen shake effect
+     * @param {number} intensity - Shake intensity in pixels
+     */
+    shake(intensity) {
+        this.shakeIntensity = intensity;
+    }
+
+    /**
+     * Update shake effect (decay over time)
+     */
+    updateShake() {
+        if (this.shakeIntensity > 0.5) {
+            // Random offset within intensity
+            this.shakeOffsetX = (Math.random() - 0.5) * this.shakeIntensity * 2;
+            this.shakeOffsetY = (Math.random() - 0.5) * this.shakeIntensity * 2;
+
+            // Decay shake
+            this.shakeIntensity *= CONFIG.SCREEN_SHAKE.DECAY;
+        } else {
+            this.shakeIntensity = 0;
+            this.shakeOffsetX = 0;
+            this.shakeOffsetY = 0;
+        }
+    }
+
+    /**
+     * Convert world coordinates to screen coordinates (includes shake offset)
      */
     worldToScreen(worldX, worldY) {
+        return {
+            x: worldX - this.x + this.shakeOffsetX,
+            y: worldY - this.y + this.shakeOffsetY
+        };
+    }
+
+    /**
+     * Convert world coordinates to screen coordinates WITHOUT shake
+     * Used for enemies so they don't shake with the camera
+     */
+    worldToScreenStable(worldX, worldY) {
         return {
             x: worldX - this.x,
             y: worldY - this.y
@@ -880,7 +1001,7 @@ class Player {
      * @param {ParticleSystem} particles - For damage effects
      * @returns {boolean} - Whether damage was actually taken
      */
-    takeDamage(damage, particles) {
+    takeDamage(damage, particles, camera = null) {
         // Check invincibility
         if (Date.now() < this.invincibleUntil) {
             return false;
@@ -897,6 +1018,11 @@ class Player {
 
         // Play hurt sound
         AudioManager.playSFX('HURT');
+
+        // Screen shake
+        if (camera) {
+            camera.shake(CONFIG.SCREEN_SHAKE.DAMAGE_INTENSITY);
+        }
 
         return true;
     }
@@ -1427,7 +1553,7 @@ class PufferFish {
      * Render the pufferfish
      */
     render(ctx, camera) {
-        const screenPos = camera.worldToScreen(this.x, this.y);
+        const screenPos = camera.worldToScreenStable(this.x, this.y);
         const sprite = SpriteLoader.get('pufferfish');
 
         ctx.save();
@@ -1680,7 +1806,7 @@ class Spike {
      * Render the spike
      */
     render(ctx, camera) {
-        const screenPos = camera.worldToScreen(this.x, this.y);
+        const screenPos = camera.worldToScreenStable(this.x, this.y);
         const sprite = SpriteLoader.get('spike');
 
         ctx.save();
@@ -1733,8 +1859,9 @@ const SpikeManager = {
      * Update all spikes and check player collision
      * @param {Player} player - For collision detection
      * @param {ParticleSystem} particles - For damage effects
+     * @param {Camera} camera - For screen shake on damage
      */
-    update(player, particles) {
+    update(player, particles, camera) {
         for (let i = this.spikes.length - 1; i >= 0; i--) {
             const spike = this.spikes[i];
             spike.update();
@@ -1744,7 +1871,7 @@ const SpikeManager = {
                 const playerRect = player.getCollisionRect();
                 const spikeRect = spike.getCollisionRect();
                 if (Utils.rectCollision(playerRect, spikeRect)) {
-                    player.takeDamage(CONFIG.SPIKE.DAMAGE, particles);
+                    player.takeDamage(CONFIG.SPIKE.DAMAGE, particles, camera);
                     spike.shouldRemove = true;
                 }
             }
@@ -2020,7 +2147,7 @@ class SwordFish {
         // Don't render if offscreen in cooldown
         if (this.state === SwordFishState.COOLDOWN) return;
 
-        const screenPos = camera.worldToScreen(this.x, this.y);
+        const screenPos = camera.worldToScreenStable(this.x, this.y);
         const sprite = SpriteLoader.get('swordfish');
         const cfg = CONFIG.SWORDFISH;
 
@@ -2100,7 +2227,7 @@ class SwordFishBullet {
     }
 
     render(ctx, camera) {
-        const screenPos = camera.worldToScreen(this.x, this.y);
+        const screenPos = camera.worldToScreenStable(this.x, this.y);
         const sprite = SpriteLoader.get('bullet');
         const cfg = CONFIG.SWORDFISH_BULLET;
 
@@ -2137,7 +2264,7 @@ const SwordFishBulletManager = {
         this.bullets.push(new SwordFishBullet(x, y, angle));
     },
 
-    update(player, particles) {
+    update(player, particles, camera) {
         for (let i = this.bullets.length - 1; i >= 0; i--) {
             const bullet = this.bullets[i];
             bullet.update();
@@ -2147,7 +2274,7 @@ const SwordFishBulletManager = {
                 const playerRect = player.getCollisionRect();
                 const bulletRect = bullet.getCollisionRect();
                 if (Utils.rectCollision(playerRect, bulletRect)) {
-                    player.takeDamage(CONFIG.SWORDFISH_BULLET.DAMAGE, particles);
+                    player.takeDamage(CONFIG.SWORDFISH_BULLET.DAMAGE, particles, camera);
                     bullet.shouldRemove = true;
                 }
             }
@@ -2219,7 +2346,7 @@ const SwordFishManager = {
                 const playerRect = player.getCollisionRect();
                 const fishRect = fish.getCollisionRect();
                 if (Utils.rectCollision(playerRect, fishRect)) {
-                    player.takeDamage(CONFIG.SWORDFISH.CONTACT_DAMAGE, particles);
+                    player.takeDamage(CONFIG.SWORDFISH.CONTACT_DAMAGE, particles, camera);
                 }
             }
 
@@ -2238,7 +2365,7 @@ const SwordFishManager = {
         }
 
         // Update bullets
-        SwordFishBulletManager.update(player, particles);
+        SwordFishBulletManager.update(player, particles, camera);
     },
 
     render(ctx, camera) {
@@ -2255,6 +2382,519 @@ const SwordFishManager = {
         this.leftRespawnTime = 0;
         this.rightRespawnTime = 0;
         SwordFishBulletManager.reset();
+    }
+};
+
+// =============================================================================
+// PIRANHA SWARM SYSTEM (Boids Flocking)
+// =============================================================================
+
+/**
+ * Piranha swarm states
+ */
+const PiranhaSwarmState = {
+    ENTERING: 'entering',      // Spawning, moving onto screen
+    WANDERING: 'wandering',    // Flocking around peacefully
+    CHASING: 'chasing',        // Aggressively pursuing player
+    LEAVING: 'leaving',        // Swimming off screen (bored)
+};
+
+/**
+ * Individual Piranha with boids behavior
+ */
+class Piranha {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.velocityX = 0;
+        this.velocityY = 0;
+
+        const cfg = CONFIG.PIRANHA;
+        this.width = cfg.WIDTH;
+        this.height = cfg.HEIGHT;
+
+        // Individual damage cooldown
+        this.lastDamageTime = 0;
+
+        // Facing direction
+        this.facingRight = true;
+    }
+
+    /**
+     * Update piranha using boids algorithm
+     * @param {PiranhaSwarm} swarm - The swarm this piranha belongs to
+     * @param {Player} player - For chase targeting
+     * @param {Object} target - Target position for wandering/leaving {x, y}
+     * @param {number} maxSpeed - Current max speed based on swarm state
+     */
+    update(swarm, player, target, maxSpeed) {
+        const cfg = CONFIG.PIRANHA;
+
+        // Calculate boids forces
+        const separation = this.calculateSeparation(swarm);
+        const alignment = this.calculateAlignment(swarm);
+        const cohesion = this.calculateCohesion(swarm);
+
+        // Apply boids forces
+        let accelX = separation.x * cfg.SEPARATION_WEIGHT +
+                     alignment.x * cfg.ALIGNMENT_WEIGHT +
+                     cohesion.x * cfg.COHESION_WEIGHT;
+        let accelY = separation.y * cfg.SEPARATION_WEIGHT +
+                     alignment.y * cfg.ALIGNMENT_WEIGHT +
+                     cohesion.y * cfg.COHESION_WEIGHT;
+
+        // Add target attraction (player when chasing, exit point when leaving)
+        if (target) {
+            const dx = target.x - this.x;
+            const dy = target.y - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > 0) {
+                const weight = swarm.state === PiranhaSwarmState.CHASING ? cfg.PLAYER_WEIGHT : 1.0;
+                accelX += (dx / dist) * weight;
+                accelY += (dy / dist) * weight;
+            }
+        }
+
+        // Apply acceleration to velocity
+        this.velocityX += accelX * 0.1;
+        this.velocityY += accelY * 0.1;
+
+        // Limit speed
+        const speed = Math.sqrt(this.velocityX ** 2 + this.velocityY ** 2);
+        if (speed > maxSpeed) {
+            this.velocityX = (this.velocityX / speed) * maxSpeed;
+            this.velocityY = (this.velocityY / speed) * maxSpeed;
+        }
+
+        // Apply velocity
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        // Update facing direction
+        if (Math.abs(this.velocityX) > 0.3) {
+            this.facingRight = this.velocityX > 0;
+        }
+    }
+
+    /**
+     * Boids Rule 1: Separation - steer away from nearby flockmates
+     */
+    calculateSeparation(swarm) {
+        const cfg = CONFIG.PIRANHA;
+        let steerX = 0, steerY = 0;
+        let count = 0;
+
+        for (const other of swarm.piranhas) {
+            if (other === this) continue;
+            const dist = Utils.distance(this.x, this.y, other.x, other.y);
+            if (dist < cfg.SEPARATION_RADIUS && dist > 0) {
+                // Steer away, weighted by distance (closer = stronger)
+                const dx = this.x - other.x;
+                const dy = this.y - other.y;
+                steerX += dx / dist;
+                steerY += dy / dist;
+                count++;
+            }
+        }
+
+        if (count > 0) {
+            steerX /= count;
+            steerY /= count;
+        }
+        return { x: steerX, y: steerY };
+    }
+
+    /**
+     * Boids Rule 2: Alignment - steer toward average heading of flockmates
+     */
+    calculateAlignment(swarm) {
+        const cfg = CONFIG.PIRANHA;
+        let avgVelX = 0, avgVelY = 0;
+        let count = 0;
+
+        for (const other of swarm.piranhas) {
+            if (other === this) continue;
+            const dist = Utils.distance(this.x, this.y, other.x, other.y);
+            if (dist < cfg.ALIGNMENT_RADIUS) {
+                avgVelX += other.velocityX;
+                avgVelY += other.velocityY;
+                count++;
+            }
+        }
+
+        if (count > 0) {
+            avgVelX /= count;
+            avgVelY /= count;
+            // Steer toward average velocity
+            return {
+                x: avgVelX - this.velocityX,
+                y: avgVelY - this.velocityY
+            };
+        }
+        return { x: 0, y: 0 };
+    }
+
+    /**
+     * Boids Rule 3: Cohesion - steer toward average position of flockmates
+     */
+    calculateCohesion(swarm) {
+        const cfg = CONFIG.PIRANHA;
+        let avgX = 0, avgY = 0;
+        let count = 0;
+
+        for (const other of swarm.piranhas) {
+            if (other === this) continue;
+            const dist = Utils.distance(this.x, this.y, other.x, other.y);
+            if (dist < cfg.COHESION_RADIUS) {
+                avgX += other.x;
+                avgY += other.y;
+                count++;
+            }
+        }
+
+        if (count > 0) {
+            avgX /= count;
+            avgY /= count;
+            // Steer toward center of mass
+            return {
+                x: (avgX - this.x) * 0.01,
+                y: (avgY - this.y) * 0.01
+            };
+        }
+        return { x: 0, y: 0 };
+    }
+
+    /**
+     * Check collision with player and deal damage
+     */
+    checkPlayerCollision(player, particles, camera) {
+        const cfg = CONFIG.PIRANHA;
+        const now = Date.now();
+
+        // Check individual cooldown
+        if (now - this.lastDamageTime < cfg.DAMAGE_COOLDOWN) return;
+
+        const playerRect = player.getCollisionRect();
+        const myRect = this.getCollisionRect();
+
+        if (Utils.rectCollision(playerRect, myRect)) {
+            if (player.takeDamage(cfg.CONTACT_DAMAGE, particles, camera)) {
+                this.lastDamageTime = now;
+            }
+        }
+    }
+
+    getCollisionRect() {
+        return {
+            x: this.x - this.width / 2,
+            y: this.y - this.height / 2,
+            width: this.width,
+            height: this.height
+        };
+    }
+
+    render(ctx, camera) {
+        const screenPos = camera.worldToScreenStable(this.x, this.y);
+        const sprite = SpriteLoader.get('piranha');
+        const cfg = CONFIG.PIRANHA;
+
+        ctx.save();
+        ctx.translate(screenPos.x, screenPos.y);
+
+        // Flip based on facing direction (sprite faces right by default)
+        if (!this.facingRight) {
+            ctx.scale(-1, 1);
+        }
+
+        if (sprite) {
+            ctx.drawImage(
+                sprite,
+                0, 0, cfg.SPRITE_SIZE, cfg.SPRITE_SIZE,
+                -this.width / 2, -this.height / 2,
+                this.width, this.height
+            );
+        } else {
+            // Fallback: small red circle
+            ctx.fillStyle = '#cc3333';
+            ctx.beginPath();
+            ctx.arc(0, 0, this.width / 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+}
+
+/**
+ * A swarm of piranhas with shared state
+ */
+class PiranhaSwarm {
+    constructor(spawnX, spawnY, targetX, targetY) {
+        const cfg = CONFIG.PIRANHA;
+
+        // Swarm state
+        this.state = PiranhaSwarmState.ENTERING;
+        this.stateEndTime = Date.now() + 2000;  // 2 seconds to enter
+
+        // Entry/exit targets
+        this.entryTarget = { x: targetX, y: targetY };
+        this.exitTarget = null;
+
+        // Create piranhas in cluster around spawn point
+        const count = cfg.SWARM_SIZE_MIN + Math.floor(Math.random() * (cfg.SWARM_SIZE_MAX - cfg.SWARM_SIZE_MIN + 1));
+        this.piranhas = [];
+        for (let i = 0; i < count; i++) {
+            const offsetX = (Math.random() - 0.5) * 50;
+            const offsetY = (Math.random() - 0.5) * 50;
+            const piranha = new Piranha(spawnX + offsetX, spawnY + offsetY);
+            // Give initial velocity toward entry target
+            const dx = targetX - spawnX;
+            const dy = targetY - spawnY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > 0) {
+                piranha.velocityX = (dx / dist) * cfg.WANDER_SPEED;
+                piranha.velocityY = (dy / dist) * cfg.WANDER_SPEED;
+            }
+            this.piranhas.push(piranha);
+        }
+
+        // Mark for removal
+        this.shouldRemove = false;
+
+        // Chase timing
+        this.chaseEndTime = 0;
+    }
+
+    /**
+     * Get the center of the swarm (average position)
+     */
+    getCenter() {
+        let avgX = 0, avgY = 0;
+        for (const p of this.piranhas) {
+            avgX += p.x;
+            avgY += p.y;
+        }
+        return {
+            x: avgX / this.piranhas.length,
+            y: avgY / this.piranhas.length
+        };
+    }
+
+    /**
+     * Update swarm state and all piranhas
+     */
+    update(player, camera, particles) {
+        const cfg = CONFIG.PIRANHA;
+        const now = Date.now();
+        const center = this.getCenter();
+
+        // State machine
+        switch (this.state) {
+            case PiranhaSwarmState.ENTERING:
+                // Move toward entry target
+                if (now >= this.stateEndTime) {
+                    this.state = PiranhaSwarmState.WANDERING;
+                    // Set a wander target (random point on screen)
+                    this.wanderTarget = {
+                        x: 100 + Math.random() * (CONFIG.WORLD_WIDTH - 200),
+                        y: camera.y + 100 + Math.random() * (CONFIG.CANVAS_HEIGHT - 200)
+                    };
+                }
+                break;
+
+            case PiranhaSwarmState.WANDERING:
+                // Check if player is close enough to trigger chase
+                const distToPlayer = Utils.distance(center.x, center.y, player.x, player.y);
+                if (distToPlayer < cfg.CHASE_TRIGGER_RANGE) {
+                    this.state = PiranhaSwarmState.CHASING;
+                    this.chaseEndTime = now + cfg.CHASE_DURATION_MIN +
+                        Math.random() * (cfg.CHASE_DURATION_MAX - cfg.CHASE_DURATION_MIN);
+                }
+
+                // Occasionally update wander target
+                if (Math.random() < 0.01) {
+                    this.wanderTarget = {
+                        x: 100 + Math.random() * (CONFIG.WORLD_WIDTH - 200),
+                        y: camera.y + 100 + Math.random() * (CONFIG.CANVAS_HEIGHT - 200)
+                    };
+                }
+                break;
+
+            case PiranhaSwarmState.CHASING:
+                // Check if chase time is up
+                if (now >= this.chaseEndTime) {
+                    this.state = PiranhaSwarmState.LEAVING;
+                    // Set exit target (nearest edge)
+                    this.setExitTarget(center, camera);
+                }
+                break;
+
+            case PiranhaSwarmState.LEAVING:
+                // Check if swarm has left the screen
+                const margin = cfg.SPAWN_MARGIN;
+                if (center.x < -margin || center.x > CONFIG.WORLD_WIDTH + margin ||
+                    center.y < camera.y - margin || center.y > camera.y + CONFIG.CANVAS_HEIGHT + margin) {
+                    this.shouldRemove = true;
+                }
+                break;
+        }
+
+        // Determine target and speed based on state
+        let target = null;
+        let maxSpeed = cfg.WANDER_SPEED;
+
+        switch (this.state) {
+            case PiranhaSwarmState.ENTERING:
+                target = this.entryTarget;
+                maxSpeed = cfg.WANDER_SPEED;
+                break;
+            case PiranhaSwarmState.WANDERING:
+                target = this.wanderTarget;
+                maxSpeed = cfg.WANDER_SPEED;
+                break;
+            case PiranhaSwarmState.CHASING:
+                target = { x: player.x, y: player.y };
+                maxSpeed = cfg.CHASE_SPEED;
+                break;
+            case PiranhaSwarmState.LEAVING:
+                target = this.exitTarget;
+                maxSpeed = cfg.WANDER_SPEED * 1.5;
+                break;
+        }
+
+        // Update all piranhas
+        for (const piranha of this.piranhas) {
+            piranha.update(this, player, target, maxSpeed);
+
+            // Check player collision (only when chasing or entering/wandering near player)
+            if (this.state !== PiranhaSwarmState.LEAVING) {
+                piranha.checkPlayerCollision(player, particles, camera);
+            }
+        }
+    }
+
+    /**
+     * Set exit target to nearest screen edge
+     */
+    setExitTarget(center, camera) {
+        const margin = CONFIG.PIRANHA.SPAWN_MARGIN * 2;
+
+        // Find distances to each edge
+        const distLeft = center.x;
+        const distRight = CONFIG.WORLD_WIDTH - center.x;
+        const distTop = center.y - camera.y;
+        const distBottom = (camera.y + CONFIG.CANVAS_HEIGHT) - center.y;
+
+        const minDist = Math.min(distLeft, distRight, distTop, distBottom);
+
+        if (minDist === distLeft) {
+            this.exitTarget = { x: -margin, y: center.y };
+        } else if (minDist === distRight) {
+            this.exitTarget = { x: CONFIG.WORLD_WIDTH + margin, y: center.y };
+        } else if (minDist === distTop) {
+            this.exitTarget = { x: center.x, y: camera.y - margin };
+        } else {
+            this.exitTarget = { x: center.x, y: camera.y + CONFIG.CANVAS_HEIGHT + margin };
+        }
+    }
+
+    render(ctx, camera) {
+        for (const piranha of this.piranhas) {
+            piranha.render(ctx, camera);
+        }
+    }
+}
+
+/**
+ * Manages piranha swarm spawning
+ */
+const PiranhaSwarmManager = {
+    swarms: [],
+    lastSpawnTime: 0,
+
+    /**
+     * Try to spawn a new swarm
+     */
+    trySpawn(camera, player) {
+        const cfg = CONFIG.PIRANHA;
+        const now = Date.now();
+
+        // Check spawn conditions
+        if (now - this.lastSpawnTime < cfg.SPAWN_INTERVAL) return;
+        if (this.swarms.length >= cfg.MAX_SWARMS) return;
+
+        // Check depth requirement
+        const playerDepth = player.y - CONFIG.WORLD_TOP_BOUNDARY;
+        if (playerDepth < cfg.MIN_DEPTH) return;
+
+        // Random chance
+        if (Math.random() > 0.5) return;
+
+        this.lastSpawnTime = now;
+
+        // Choose spawn edge (not from where player is heading)
+        const edges = ['left', 'right', 'top', 'bottom'];
+        const edge = edges[Math.floor(Math.random() * edges.length)];
+
+        let spawnX, spawnY, targetX, targetY;
+        const margin = cfg.SPAWN_MARGIN;
+        const visibleTop = camera.y;
+        const visibleBottom = camera.y + CONFIG.CANVAS_HEIGHT;
+
+        switch (edge) {
+            case 'left':
+                spawnX = -margin;
+                spawnY = visibleTop + Math.random() * CONFIG.CANVAS_HEIGHT;
+                targetX = 150;
+                targetY = spawnY;
+                break;
+            case 'right':
+                spawnX = CONFIG.WORLD_WIDTH + margin;
+                spawnY = visibleTop + Math.random() * CONFIG.CANVAS_HEIGHT;
+                targetX = CONFIG.WORLD_WIDTH - 150;
+                targetY = spawnY;
+                break;
+            case 'top':
+                spawnX = Math.random() * CONFIG.WORLD_WIDTH;
+                spawnY = visibleTop - margin;
+                targetX = spawnX;
+                targetY = visibleTop + 150;
+                break;
+            case 'bottom':
+                spawnX = Math.random() * CONFIG.WORLD_WIDTH;
+                spawnY = visibleBottom + margin;
+                targetX = spawnX;
+                targetY = visibleBottom - 150;
+                break;
+        }
+
+        this.swarms.push(new PiranhaSwarm(spawnX, spawnY, targetX, targetY));
+    },
+
+    update(player, camera, particles) {
+        // Try to spawn new swarm
+        this.trySpawn(camera, player);
+
+        // Update existing swarms
+        for (let i = this.swarms.length - 1; i >= 0; i--) {
+            const swarm = this.swarms[i];
+            swarm.update(player, camera, particles);
+
+            if (swarm.shouldRemove) {
+                this.swarms.splice(i, 1);
+            }
+        }
+    },
+
+    render(ctx, camera) {
+        for (const swarm of this.swarms) {
+            swarm.render(ctx, camera);
+        }
+    },
+
+    reset() {
+        this.swarms = [];
+        this.lastSpawnTime = 0;
     }
 };
 
@@ -2802,6 +3442,9 @@ class Game {
         SpriteLoader.load('spike', 'Sprites/spike.png');
         SpriteLoader.load('swordfish', 'Sprites/SwordFish.png');
         SpriteLoader.load('bullet', 'Sprites/Bullet.png');
+        SpriteLoader.load('piranha', 'Sprites/Piranha.png');
+        SpriteLoader.load('title', 'Sprites/Title.png');
+        SpriteLoader.load('playButton', 'Sprites/PlayButton.png');
 
         // Game objects
         this.camera = new Camera();
@@ -2819,16 +3462,79 @@ class Game {
             CONFIG.WORLD_TOP_BOUNDARY + 300
         );
 
-        // Game state
-        this.isRunning = true;
-        this.isGameOver = false;
+        // Game state machine
+        this.gameState = GameState.MENU;
         this.lastTime = performance.now();
         this.dashKeyWasPressed = false;  // For edge detection
         this.muteKeyWasPressed = false;  // For mute toggle edge detection
 
+        // Menu state
+        this.menuPlayerX = 0;           // Player X position on title
+        this.menuPlayerVelX = CONFIG.MENU.PLAYER_WALK_SPEED;
+        this.menuPlayerPauseUntil = 0;  // Time when patrol pause ends
+        this.menuPlayerAnimFrame = 0;
+
+        // Intro cutscene state
+        this.introPlayerY = 0;          // Y position during fall
+        this.introPlayerVelY = 0;       // Fall velocity
+        this.introStartTime = 0;        // When intro started
+
+        // Setup mouse click handler for menu
+        this.setupClickHandler();
+
         // Start game loop
         this.gameLoop = this.gameLoop.bind(this);
         requestAnimationFrame(this.gameLoop);
+    }
+
+    /**
+     * Setup click handler for play button
+     */
+    setupClickHandler() {
+        this.canvas.addEventListener('click', (e) => {
+            if (this.gameState !== GameState.MENU) return;
+
+            // Get click position relative to canvas
+            const rect = this.canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            // Calculate play button bounds
+            const cfg = CONFIG.MENU;
+            const buttonWidth = cfg.BUTTON_SPRITE_WIDTH * cfg.BUTTON_SCALE;
+            const buttonHeight = cfg.BUTTON_SPRITE_HEIGHT * cfg.BUTTON_SCALE;
+            const buttonX = (CONFIG.CANVAS_WIDTH - buttonWidth) / 2;
+            const buttonY = cfg.BUTTON_Y;
+
+            // Check if click is within button bounds
+            if (clickX >= buttonX && clickX <= buttonX + buttonWidth &&
+                clickY >= buttonY && clickY <= buttonY + buttonHeight) {
+                this.startIntro();
+            }
+        });
+    }
+
+    /**
+     * Start the intro cutscene
+     */
+    startIntro() {
+        this.gameState = GameState.INTRO;
+        this.introStartTime = Date.now();
+
+        // Calculate title position for player start
+        const cfg = CONFIG.MENU;
+        const titleWidth = cfg.TITLE_SPRITE_WIDTH * cfg.TITLE_SCALE;
+        const titleX = (CONFIG.CANVAS_WIDTH - titleWidth) / 2;
+        const titleHeight = cfg.TITLE_SPRITE_HEIGHT * cfg.TITLE_SCALE;
+
+        // Player starts at their menu position on the title, then falls
+        this.introPlayerX = titleX + this.menuPlayerX;
+        this.introPlayerY = cfg.TITLE_Y + titleHeight - CONFIG.PLAYER.HEIGHT;
+        this.introPlayerVelY = 0;
+
+        // Reset actual player position to where they'll end up
+        this.player.x = this.introPlayerX + CONFIG.PLAYER.WIDTH / 2;
+        this.player.y = CONFIG.WORLD_TOP_BOUNDARY + 100;
     }
 
     /**
@@ -2850,15 +3556,101 @@ class Game {
         const deltaTime = Math.min(currentTime - this.lastTime, 50);
         this.lastTime = currentTime;
 
-        if (this.isRunning) {
-            this.update(deltaTime);
-            this.render();
-        } else if (this.isGameOver) {
-            // Keep rendering game over screen
-            this.renderGameOver();
+        switch (this.gameState) {
+            case GameState.MENU:
+                this.updateMenu(deltaTime);
+                this.renderMenu();
+                break;
+            case GameState.INTRO:
+                this.updateIntro(deltaTime);
+                this.renderIntro();
+                break;
+            case GameState.PLAYING:
+                this.update(deltaTime);
+                this.render();
+                break;
+            case GameState.GAME_OVER:
+                this.renderGameOver();
+                break;
         }
 
         requestAnimationFrame(this.gameLoop);
+    }
+
+    /**
+     * Update menu state (player patrol on title)
+     */
+    updateMenu(deltaTime) {
+        const cfg = CONFIG.MENU;
+        const now = Date.now();
+
+        // Calculate title dimensions
+        const titleWidth = cfg.TITLE_SPRITE_WIDTH * cfg.TITLE_SCALE;
+        const playerWidth = CONFIG.PLAYER.WIDTH;
+
+        // Update patrol pause
+        if (now < this.menuPlayerPauseUntil) {
+            return;  // Still pausing
+        }
+
+        // Move player
+        this.menuPlayerX += this.menuPlayerVelX;
+
+        // Check bounds and reverse
+        const maxX = titleWidth - playerWidth;
+        if (this.menuPlayerX >= maxX) {
+            this.menuPlayerX = maxX;
+            this.menuPlayerVelX = -cfg.PLAYER_WALK_SPEED;
+            this.menuPlayerPauseUntil = now + cfg.PLAYER_PATROL_PAUSE;
+        } else if (this.menuPlayerX <= 0) {
+            this.menuPlayerX = 0;
+            this.menuPlayerVelX = cfg.PLAYER_WALK_SPEED;
+            this.menuPlayerPauseUntil = now + cfg.PLAYER_PATROL_PAUSE;
+        }
+
+        // Update animation frame
+        this.menuPlayerAnimFrame += CONFIG.PLAYER.ANIMATION_SPEED;
+        if (this.menuPlayerAnimFrame >= CONFIG.PLAYER.SPRITE_FRAMES) {
+            this.menuPlayerAnimFrame = 0;
+        }
+    }
+
+    /**
+     * Update intro cutscene (falling into water)
+     */
+    updateIntro(deltaTime) {
+        const cfg = CONFIG.INTRO;
+        const now = Date.now();
+
+        // Apply gravity
+        this.introPlayerVelY += cfg.FALL_GRAVITY;
+        if (this.introPlayerVelY > cfg.FALL_MAX_SPEED) {
+            this.introPlayerVelY = cfg.FALL_MAX_SPEED;
+        }
+
+        // Move player down
+        this.introPlayerY += this.introPlayerVelY;
+
+        // Check if intro duration is complete
+        if (now - this.introStartTime >= cfg.DURATION) {
+            this.startPlaying();
+        }
+    }
+
+    /**
+     * Transition to playing state
+     */
+    startPlaying() {
+        this.gameState = GameState.PLAYING;
+
+        // Reset player to starting position
+        this.player.x = CONFIG.WORLD_WIDTH / 2;
+        this.player.y = CONFIG.WORLD_TOP_BOUNDARY + 100;
+        this.player.velocityX = 0;
+        this.player.velocityY = 0;
+
+        // Reset camera to follow player
+        this.camera.y = this.player.y - CONFIG.CANVAS_HEIGHT / 2;
     }
 
     /**
@@ -2895,10 +3687,13 @@ class Game {
         PufferFishManager.update(this.player, this.camera);
 
         // Update spikes
-        SpikeManager.update(this.player, this.particles);
+        SpikeManager.update(this.player, this.particles, this.camera);
 
-        // Update swordfish
+        // Update swordfish (camera passed for screen shake on damage)
         SwordFishManager.update(this.player, this.camera, this.particles);
+
+        // Update piranha swarms
+        PiranhaSwarmManager.update(this.player, this.camera, this.particles);
 
         // Update decorative bubbles
         BubbleManager.update(this.camera);
@@ -2929,7 +3724,7 @@ class Game {
             const enemyRect = this.enemy.getCollisionRect();
 
             if (Utils.rectCollision(playerRect, enemyRect)) {
-                this.player.takeDamage(CONFIG.ENEMY.CHARGE_DAMAGE, this.particles);
+                this.player.takeDamage(CONFIG.ENEMY.CHARGE_DAMAGE, this.particles, this.camera);
             }
         }
     }
@@ -2938,8 +3733,7 @@ class Game {
      * Handle game over state
      */
     handleGameOver() {
-        this.isRunning = false;
-        this.isGameOver = true;
+        this.gameState = GameState.GAME_OVER;
 
         // Store final depth for display
         this.finalDepth = Math.floor((this.player.y - CONFIG.WORLD_TOP_BOUNDARY) / 10);
@@ -3030,6 +3824,9 @@ class Game {
         // Reset swordfish
         SwordFishManager.reset();
 
+        // Reset piranha swarms
+        PiranhaSwarmManager.reset();
+
         // Reset bubbles
         BubbleManager.reset();
 
@@ -3044,8 +3841,144 @@ class Game {
         this.camera = new Camera();
 
         // Resume game
-        this.isRunning = true;
-        this.isGameOver = false;
+        this.gameState = GameState.PLAYING;
+    }
+
+    /**
+     * Render the main menu
+     */
+    renderMenu() {
+        const ctx = this.ctx;
+        const cfg = CONFIG.MENU;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        this.disableImageSmoothing();
+
+        // Draw gradient background (ocean)
+        const gradient = ctx.createLinearGradient(0, 0, 0, CONFIG.CANVAS_HEIGHT);
+        gradient.addColorStop(0, '#1a4a6e');
+        gradient.addColorStop(1, '#0a2a4e');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+
+        // Calculate title position (centered horizontally)
+        const titleWidth = cfg.TITLE_SPRITE_WIDTH * cfg.TITLE_SCALE;
+        const titleHeight = cfg.TITLE_SPRITE_HEIGHT * cfg.TITLE_SCALE;
+        const titleX = (CONFIG.CANVAS_WIDTH - titleWidth) / 2;
+        const titleY = cfg.TITLE_Y;
+
+        // Draw title sprite
+        const titleSprite = SpriteLoader.get('title');
+        if (titleSprite) {
+            ctx.drawImage(
+                titleSprite,
+                0, 0, cfg.TITLE_SPRITE_WIDTH, cfg.TITLE_SPRITE_HEIGHT,
+                titleX, titleY, titleWidth, titleHeight
+            );
+        } else {
+            // Fallback: draw placeholder rectangle
+            ctx.fillStyle = '#334466';
+            ctx.fillRect(titleX, titleY, titleWidth, titleHeight);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '24px BoldPixels, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('DEEP DIVE', CONFIG.CANVAS_WIDTH / 2, titleY + titleHeight / 2);
+        }
+
+        // Draw player on top of title
+        const playerSprite = SpriteLoader.get('player');
+        const playerX = titleX + this.menuPlayerX;
+        const playerY = titleY + titleHeight - CONFIG.PLAYER.HEIGHT;
+        const facingRight = this.menuPlayerVelX > 0;
+
+        ctx.save();
+        ctx.translate(playerX + CONFIG.PLAYER.WIDTH / 2, playerY + CONFIG.PLAYER.HEIGHT / 2);
+        if (!facingRight) {
+            ctx.scale(-1, 1);
+        }
+
+        if (playerSprite) {
+            const frameIndex = Math.floor(this.menuPlayerAnimFrame) % CONFIG.PLAYER.SPRITE_FRAMES;
+            const srcX = frameIndex * CONFIG.PLAYER.SPRITE_FRAME_WIDTH;
+            ctx.drawImage(
+                playerSprite,
+                srcX, 0, CONFIG.PLAYER.SPRITE_FRAME_WIDTH, CONFIG.PLAYER.SPRITE_FRAME_HEIGHT,
+                -CONFIG.PLAYER.WIDTH / 2, -CONFIG.PLAYER.HEIGHT / 2,
+                CONFIG.PLAYER.WIDTH, CONFIG.PLAYER.HEIGHT
+            );
+        } else {
+            ctx.fillStyle = '#44aaff';
+            ctx.fillRect(-CONFIG.PLAYER.WIDTH / 2, -CONFIG.PLAYER.HEIGHT / 2, CONFIG.PLAYER.WIDTH, CONFIG.PLAYER.HEIGHT);
+        }
+        ctx.restore();
+
+        // Calculate play button position (centered horizontally)
+        const buttonWidth = cfg.BUTTON_SPRITE_WIDTH * cfg.BUTTON_SCALE;
+        const buttonHeight = cfg.BUTTON_SPRITE_HEIGHT * cfg.BUTTON_SCALE;
+        const buttonX = (CONFIG.CANVAS_WIDTH - buttonWidth) / 2;
+        const buttonY = cfg.BUTTON_Y;
+
+        // Draw play button sprite
+        const buttonSprite = SpriteLoader.get('playButton');
+        if (buttonSprite) {
+            ctx.drawImage(
+                buttonSprite,
+                0, 0, cfg.BUTTON_SPRITE_WIDTH, cfg.BUTTON_SPRITE_HEIGHT,
+                buttonX, buttonY, buttonWidth, buttonHeight
+            );
+        } else {
+            // Fallback: draw placeholder button
+            ctx.fillStyle = '#446688';
+            ctx.fillRect(buttonX, buttonY, buttonWidth, buttonHeight);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '16px BoldPixels, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('PLAY', CONFIG.CANVAS_WIDTH / 2, buttonY + buttonHeight / 2 + 6);
+        }
+    }
+
+    /**
+     * Render the intro cutscene
+     */
+    renderIntro() {
+        const ctx = this.ctx;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        this.disableImageSmoothing();
+
+        // Draw gradient background (transitioning to underwater)
+        const gradient = ctx.createLinearGradient(0, 0, 0, CONFIG.CANVAS_HEIGHT);
+        gradient.addColorStop(0, '#1a4a6e');
+        gradient.addColorStop(0.3, '#0a3a5e');
+        gradient.addColorStop(1, '#0a2a4e');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+
+        // Draw falling player
+        const playerSprite = SpriteLoader.get('player');
+        const playerX = this.introPlayerX;
+        const playerY = this.introPlayerY;
+
+        ctx.save();
+        ctx.translate(playerX + CONFIG.PLAYER.WIDTH / 2, playerY + CONFIG.PLAYER.HEIGHT / 2);
+
+        // Player faces down when falling
+        ctx.rotate(Math.PI / 2);
+
+        if (playerSprite) {
+            ctx.drawImage(
+                playerSprite,
+                0, 0, CONFIG.PLAYER.SPRITE_FRAME_WIDTH, CONFIG.PLAYER.SPRITE_FRAME_HEIGHT,
+                -CONFIG.PLAYER.WIDTH / 2, -CONFIG.PLAYER.HEIGHT / 2,
+                CONFIG.PLAYER.WIDTH, CONFIG.PLAYER.HEIGHT
+            );
+        } else {
+            ctx.fillStyle = '#44aaff';
+            ctx.fillRect(-CONFIG.PLAYER.WIDTH / 2, -CONFIG.PLAYER.HEIGHT / 2, CONFIG.PLAYER.WIDTH, CONFIG.PLAYER.HEIGHT);
+        }
+        ctx.restore();
     }
 
     /**
@@ -3078,6 +4011,9 @@ class Game {
 
         // Draw swordfish and bullets
         SwordFishManager.render(this.ctx, this.camera);
+
+        // Draw piranha swarms
+        PiranhaSwarmManager.render(this.ctx, this.camera);
 
         // Draw decorative bubbles (on top of everything for visibility)
         BubbleManager.render(this.ctx, this.camera);
