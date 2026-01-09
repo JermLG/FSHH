@@ -74,14 +74,25 @@ const CONFIG = {
         LOOK_AHEAD: 100,         // Pixels to look ahead in movement direction
     },
 
-    // Background settings (nine-slice animated)
+    // Background settings (tileable with depth zones)
     BACKGROUND: {
-        FRAME_WIDTH: 48,         // Width of each frame in spritesheet
-        FRAME_HEIGHT: 48,        // Height of each frame
-        FRAMES: 4,               // Number of animation frames
-        ANIMATION_SPEED: 0.05,   // Slow animation for subtle effect
-        BORDER: 16,              // Nine-slice border size (corners and edges)
-        TILE_SCALE: 3,           // Scale factor for rendering (48 * 3 = 144px tiles)
+        TILE_SIZE: 16,           // Each tile is 16x16 in spritesheet
+        TILE_SCALE: 3,           // Scale factor for rendering (16 * 3 = 48px rendered)
+        DEPTH_ZONE_HEIGHT: 300,  // Pixels per depth zone (switch tile group every 300m)
+        // Frames 0-2: Light (shallow), 3-5: Medium, 6-8: Dark (deep)
+        // Frames 9-11: Bubble sprites
+    },
+
+    // Bubble decoration settings
+    BUBBLE: {
+        TILE_SIZE: 16,           // Bubble sprite size in sheet
+        SCALE: 2,                // Rendered scale
+        MIN_SPEED: 0.5,          // Minimum rise speed
+        MAX_SPEED: 1.5,          // Maximum rise speed
+        SPAWN_INTERVAL: 500,     // ms between spawn attempts
+        MAX_COUNT: 15,           // Maximum bubbles on screen
+        WOBBLE_SPEED: 0.03,      // Horizontal wobble frequency
+        WOBBLE_AMOUNT: 20,       // Horizontal wobble pixels
     },
 
     // PufferFish settings
@@ -98,6 +109,96 @@ const CONFIG = {
         SPAWN_INTERVAL: 3000,    // ms between spawn attempts
         MAX_COUNT: 5,            // Maximum pufferfish on screen
         DIRECTION_CHANGE_TIME: 2000, // ms between direction changes
+        SPIKE_LAUNCH_FRAME: 7,   // Frame at which spikes are launched
+    },
+
+    // Spike projectile settings
+    SPIKE: {
+        WIDTH: 16,               // Rendered size
+        HEIGHT: 16,
+        SPRITE_WIDTH: 8,         // Source sprite size (assuming 8x8)
+        SPRITE_HEIGHT: 8,
+        SPEED: 4,                // Projectile speed
+        DAMAGE: 15,              // Damage dealt to player
+        COUNT: 8,                // Number of spikes launched in circle
+        LIFETIME: 3000,          // ms before spike disappears
+    },
+
+    // SwordFish enemy settings
+    SWORDFISH: {
+        SPRITE_FRAME_WIDTH: 40,  // Width of each frame in spritesheet
+        SPRITE_FRAME_HEIGHT: 32, // Height of each frame
+        WIDTH: 60,               // Rendered width (40 * 1.5)
+        HEIGHT: 48,              // Rendered height (32 * 1.5)
+        TOTAL_FRAMES: 3,         // 3 frames total
+        SLIDE_SPEED: 2,          // Horizontal slide speed
+        Y_FOLLOW_SPEED: 0.05,    // How fast it follows player Y (lerp factor)
+        CONTACT_DAMAGE: 20,      // Damage on body contact
+        MIN_DEPTH: 1000,         // Min depth before spawning (100m = 1000 pixels)
+        SPAWN_MARGIN: 100,       // Distance offscreen to spawn
+        // Timing (in ms)
+        SLIDE_IN_MIN: 1000,
+        SLIDE_IN_MAX: 3000,
+        WAIT_BEFORE_AIM_MIN: 1000,
+        WAIT_BEFORE_AIM_MAX: 3000,
+        ATTACK_DURATION: 10000,  // Time on frame 3 attacking
+        FIRE_INTERVAL_MIN: 2000,
+        FIRE_INTERVAL_MAX: 5000,
+        WAIT_BEFORE_EXIT_MIN: 2000,
+        WAIT_BEFORE_EXIT_MAX: 3000,
+        SLIDE_OUT_MIN: 1000,
+        SLIDE_OUT_MAX: 3000,
+        RESPAWN_DELAY_MIN: 5000,
+        RESPAWN_DELAY_MAX: 10000,
+    },
+
+    // SwordFish bullet settings
+    SWORDFISH_BULLET: {
+        WIDTH: 10,               // Rendered size (5 * 2)
+        HEIGHT: 10,
+        SPRITE_WIDTH: 5,         // Source sprite size
+        SPRITE_HEIGHT: 5,
+        SPEED: 5,                // Faster than pufferfish spikes
+        DAMAGE: 10,              // Damage dealt to player
+        LIFETIME: 5000,          // ms before bullet disappears
+    },
+
+    // Audio settings
+    AUDIO: {
+        BGM_PATH: 'Audio/FSHHH_JLG.wav',
+        BGM_VOLUME: 0.5,             // Default volume (0-1)
+        SFX_VOLUME: 0.6,             // Default SFX volume (0-1)
+        // Sound effect paths
+        SFX: {
+            DASH: 'Audio/dash.wav',
+            HURT: 'Audio/hurt.wav',
+            DEATH: 'Audio/death.wav',
+            PUFF: 'Audio/puff.wav',
+            SPIKE_LAUNCH: 'Audio/spike_launch.wav',
+            BULLET_FIRE: 'Audio/bullet_fire.wav',
+            SLIDE_IN: 'Audio/slide_in.wav',
+            SLIDE_OUT: 'Audio/slide_out.wav',
+        },
+    },
+
+    // Underwater post-processing effects
+    UNDERWATER: {
+        // Blue tint overlay
+        TINT_COLOR: 'rgba(0, 80, 150, 0.08)',
+        TINT_DEEP_COLOR: 'rgba(0, 30, 80, 0.15)',
+
+        // Caustic light rays
+        CAUSTIC_COUNT: 5,
+        CAUSTIC_SPEED: 0.0008,
+        CAUSTIC_OPACITY: 0.06,
+
+        // Vignette (darker edges)
+        VIGNETTE_STRENGTH: 0.3,
+
+        // Floating particles (dust/plankton)
+        PARTICLE_COUNT: 30,
+        PARTICLE_SIZE: 2,
+        PARTICLE_OPACITY: 0.3,
     },
 
     // Colors
@@ -214,6 +315,161 @@ const SpriteLoader = {
      */
     isReady() {
         return this.loaded >= this.total;
+    }
+};
+
+// =============================================================================
+// AUDIO MANAGER
+// =============================================================================
+
+/**
+ * Handles background music and sound effects
+ * Manages browser autoplay restrictions by waiting for user interaction
+ */
+const AudioManager = {
+    bgm: null,
+    sfx: {},           // Preloaded sound effect Audio objects
+    isMuted: false,
+    isInitialized: false,
+    hasUserInteracted: false,
+
+    /**
+     * Initialize the audio system
+     * Sets up the background music and preloads sound effects
+     */
+    init() {
+        this.bgm = new Audio(CONFIG.AUDIO.BGM_PATH);
+        this.bgm.loop = true;
+        this.bgm.volume = CONFIG.AUDIO.BGM_VOLUME;
+
+        // Handle loading errors gracefully
+        this.bgm.onerror = () => {
+            console.warn('Failed to load background music');
+        };
+
+        this.bgm.oncanplaythrough = () => {
+            console.log('Background music loaded');
+            this.isInitialized = true;
+            // Try to play if user already interacted
+            if (this.hasUserInteracted && !this.isMuted) {
+                this.play();
+            }
+        };
+
+        // Preload all sound effects
+        this.preloadSFX();
+
+        // Set up user interaction listeners to enable audio
+        this.setupUserInteractionListeners();
+    },
+
+    /**
+     * Preload all sound effects for instant playback
+     */
+    preloadSFX() {
+        const sfxConfig = CONFIG.AUDIO.SFX;
+        for (const [name, path] of Object.entries(sfxConfig)) {
+            const audio = new Audio(path);
+            audio.volume = CONFIG.AUDIO.SFX_VOLUME;
+            audio.preload = 'auto';
+            this.sfx[name] = audio;
+            console.log(`Preloaded SFX: ${name}`);
+        }
+    },
+
+    /**
+     * Set up listeners for first user interaction
+     * Browsers require user interaction before playing audio
+     */
+    setupUserInteractionListeners() {
+        const enableAudio = () => {
+            if (!this.hasUserInteracted) {
+                this.hasUserInteracted = true;
+                if (this.isInitialized && !this.isMuted) {
+                    this.play();
+                }
+            }
+        };
+
+        // Listen for any user interaction
+        window.addEventListener('keydown', enableAudio, { once: false });
+        window.addEventListener('click', enableAudio, { once: false });
+        window.addEventListener('touchstart', enableAudio, { once: false });
+    },
+
+    /**
+     * Play the background music
+     */
+    play() {
+        if (this.bgm && this.isInitialized && !this.isMuted) {
+            this.bgm.play().catch(err => {
+                // Autoplay was prevented, will retry on next interaction
+                console.log('Audio autoplay prevented, waiting for interaction');
+            });
+        }
+    },
+
+    /**
+     * Pause the background music
+     */
+    pause() {
+        if (this.bgm) {
+            this.bgm.pause();
+        }
+    },
+
+    /**
+     * Play a sound effect by name
+     * Creates a clone for overlapping sounds
+     * @param {string} name - SFX name (e.g., 'DASH', 'HURT')
+     * @param {number} volume - Optional volume override (0-1)
+     */
+    playSFX(name, volume = null) {
+        if (this.isMuted || !this.hasUserInteracted) return;
+
+        const sfx = this.sfx[name];
+        if (!sfx) {
+            console.warn(`SFX not found: ${name}`);
+            return;
+        }
+
+        // Clone the audio to allow overlapping plays
+        const sound = sfx.cloneNode();
+        sound.volume = volume !== null ? volume : CONFIG.AUDIO.SFX_VOLUME;
+        sound.play().catch(err => {
+            // Silently fail if can't play
+        });
+    },
+
+    /**
+     * Toggle mute state
+     * @returns {boolean} New mute state
+     */
+    toggleMute() {
+        this.isMuted = !this.isMuted;
+        if (this.isMuted) {
+            this.pause();
+        } else if (this.hasUserInteracted) {
+            this.play();
+        }
+        return this.isMuted;
+    },
+
+    /**
+     * Set volume
+     * @param {number} volume - Volume level (0-1)
+     */
+    setVolume(volume) {
+        if (this.bgm) {
+            this.bgm.volume = Utils.clamp(volume, 0, 1);
+        }
+    },
+
+    /**
+     * Check if audio is currently muted
+     */
+    getMuteState() {
+        return this.isMuted;
     }
 };
 
@@ -439,6 +695,7 @@ class Player {
 
         // Visual state
         this.facingRight = true;
+        this.facingDown = false;      // For vertical flip when swimming down
 
         // Animation state
         this.animationFrame = 0;      // Current frame (can be fractional)
@@ -488,6 +745,9 @@ class Player {
 
         // Spawn dash particles
         particles.spawn(this.x, this.y, 'dash', 10);
+
+        // Play dash sound
+        AudioManager.playSFX('DASH');
 
         return true;
     }
@@ -541,6 +801,11 @@ class Player {
         // Update facing direction based on horizontal velocity
         if (Math.abs(this.velocityX) > 0.5) {
             this.facingRight = this.velocityX > 0;
+        }
+
+        // Update vertical facing based on vertical velocity
+        if (Math.abs(this.velocityY) > 0.5) {
+            this.facingDown = this.velocityY > 0;
         }
 
         // Update animation - only animate when moving
@@ -630,6 +895,9 @@ class Player {
         // Spawn damage particles
         particles.spawn(this.x, this.y, 'damage', 15);
 
+        // Play hurt sound
+        AudioManager.playSFX('HURT');
+
         return true;
     }
 
@@ -676,10 +944,10 @@ class Player {
         ctx.save();
         ctx.translate(screenPos.x, screenPos.y);
 
-        // Flip based on facing direction
-        if (!this.facingRight) {
-            ctx.scale(-1, 1);
-        }
+        // Flip based on facing direction (horizontal and vertical)
+        const scaleX = this.facingRight ? 1 : -1;
+        const scaleY = this.facingDown ? -1 : 1;
+        ctx.scale(scaleX, scaleY);
 
         // Draw sprite if loaded, otherwise draw fallback shape
         if (sprite) {
@@ -1043,6 +1311,9 @@ class PufferFish {
 
         // Mark for removal
         this.shouldRemove = false;
+
+        // Track if spikes have been launched (only once per puff)
+        this.hasLaunchedSpikes = false;
     }
 
     /**
@@ -1059,6 +1330,7 @@ class PufferFish {
                 if (distToPlayer < cfg.SCARE_DISTANCE) {
                     this.state = PufferState.PUFFING;
                     this.animationFrame = 1;  // Start puff animation at frame 1
+                    AudioManager.playSFX('PUFF');
                 }
 
                 // Peaceful wandering - occasionally change direction slightly
@@ -1082,6 +1354,13 @@ class PufferFish {
                 // Play puff animation (frames 1-8)
                 this.animationFrame += cfg.PUFF_ANIMATION_SPEED;
                 this.currentFrame = Math.floor(this.animationFrame);
+
+                // Launch spikes at frame 7 (once only)
+                if (this.currentFrame >= cfg.SPIKE_LAUNCH_FRAME && !this.hasLaunchedSpikes) {
+                    SpikeManager.launchFromPosition(this.x, this.y);
+                    this.hasLaunchedSpikes = true;
+                    AudioManager.playSFX('SPIKE_LAUNCH');
+                }
 
                 // Once we reach frame 8, stay puffed
                 if (this.currentFrame >= 8) {
@@ -1191,54 +1470,106 @@ const PufferFishManager = {
     lastSpawnTime: 0,
 
     /**
-     * Attempt to spawn a new pufferfish
+     * Attempt to spawn pufferfish from screen edges
+     * Spawns faster and more frequently at depth, biased toward player movement direction
      * @param {Camera} camera - To determine visible area
+     * @param {Player} player - To bias spawn direction
      */
-    trySpawn(camera) {
+    trySpawn(camera, player) {
         const cfg = CONFIG.PUFFERFISH;
         const now = Date.now();
 
-        // Check spawn interval and max count
-        if (now - this.lastSpawnTime < cfg.SPAWN_INTERVAL) return;
-        if (this.pufferfish.length >= cfg.MAX_COUNT) return;
+        // Calculate depth factor (0 at surface, 1 at max depth)
+        const depthFactor = Math.min(1, camera.y / (CONFIG.WORLD_HEIGHT * 0.6));
 
-        // Random chance to spawn
-        if (Math.random() > 0.3) return;
+        // Scale spawn rates dramatically at depth
+        // Surface: 3000ms interval, 5 max, 30% chance
+        // Deep: 200ms interval, 25 max, 95% chance
+        const adjustedInterval = cfg.SPAWN_INTERVAL * Math.max(0.07, 1 - depthFactor * 0.93);
+        const adjustedMaxCount = Math.floor(cfg.MAX_COUNT + depthFactor * 20);
+        const spawnChance = 0.3 + depthFactor * 0.65;
+
+        // Check if we can spawn
+        if (now - this.lastSpawnTime < adjustedInterval) return;
+        if (this.pufferfish.length >= adjustedMaxCount) return;
+        if (Math.random() > spawnChance) return;
 
         this.lastSpawnTime = now;
 
-        // Choose spawn edge: 0=left, 1=right, 2=top, 3=bottom
-        const edge = Math.floor(Math.random() * 4);
+        // Spawn from edge, biased toward where player is heading
+        this.spawnFromEdge(camera, player, cfg, depthFactor);
+
+        // At extreme depth, spawn multiple at once for "pufferfish hell"
+        if (depthFactor > 0.6 && this.pufferfish.length < adjustedMaxCount - 2) {
+            // Spawn 1-3 extra pufferfish
+            const extraCount = 1 + Math.floor(Math.random() * 3 * depthFactor);
+            for (let i = 0; i < extraCount && this.pufferfish.length < adjustedMaxCount; i++) {
+                this.spawnFromEdge(camera, player, cfg, depthFactor);
+            }
+        }
+    },
+
+    /**
+     * Spawn a pufferfish from screen edge, biased toward player movement
+     */
+    spawnFromEdge(camera, player, cfg, depthFactor) {
         let x, y, velX, velY;
 
         const visibleTop = camera.y;
         const visibleBottom = camera.y + CONFIG.CANVAS_HEIGHT;
         const margin = cfg.SPAWN_MARGIN;
 
+        // Bias edge selection based on player velocity
+        // If player moving down, spawn more from bottom
+        // If player moving right, spawn more from right, etc.
+        let edge;
+        const playerVelY = player.velocityY;
+        const playerVelX = player.velocityX;
+
+        if (Math.abs(playerVelY) > 2 && playerVelY > 0) {
+            // Player swimming down - 70% chance from bottom, 30% from sides
+            edge = Math.random() < 0.7 ? 3 : (Math.random() < 0.5 ? 0 : 1);
+        } else if (Math.abs(playerVelY) > 2 && playerVelY < 0) {
+            // Player swimming up - 70% chance from top, 30% from sides
+            edge = Math.random() < 0.7 ? 2 : (Math.random() < 0.5 ? 0 : 1);
+        } else if (Math.abs(playerVelX) > 2 && playerVelX > 0) {
+            // Player swimming right - 60% from right
+            edge = Math.random() < 0.6 ? 1 : Math.floor(Math.random() * 4);
+        } else if (Math.abs(playerVelX) > 2 && playerVelX < 0) {
+            // Player swimming left - 60% from left
+            edge = Math.random() < 0.6 ? 0 : Math.floor(Math.random() * 4);
+        } else {
+            // Random edge
+            edge = Math.floor(Math.random() * 4);
+        }
+
+        // Faster swim speed at depth
+        const swimSpeed = cfg.SWIM_SPEED * (1 + depthFactor * 0.5);
+
         switch (edge) {
             case 0: // Left edge
                 x = -margin;
                 y = visibleTop + Math.random() * CONFIG.CANVAS_HEIGHT;
-                velX = cfg.SWIM_SPEED;
-                velY = (Math.random() - 0.5) * cfg.SWIM_SPEED * 0.5;
+                velX = swimSpeed;
+                velY = (Math.random() - 0.5) * swimSpeed * 0.5;
                 break;
             case 1: // Right edge
                 x = CONFIG.WORLD_WIDTH + margin;
                 y = visibleTop + Math.random() * CONFIG.CANVAS_HEIGHT;
-                velX = -cfg.SWIM_SPEED;
-                velY = (Math.random() - 0.5) * cfg.SWIM_SPEED * 0.5;
+                velX = -swimSpeed;
+                velY = (Math.random() - 0.5) * swimSpeed * 0.5;
                 break;
             case 2: // Top edge
                 x = Math.random() * CONFIG.WORLD_WIDTH;
                 y = visibleTop - margin;
-                velX = (Math.random() - 0.5) * cfg.SWIM_SPEED * 0.5;
-                velY = cfg.SWIM_SPEED;
+                velX = (Math.random() - 0.5) * swimSpeed * 0.5;
+                velY = swimSpeed;
                 break;
             case 3: // Bottom edge
                 x = Math.random() * CONFIG.WORLD_WIDTH;
                 y = visibleBottom + margin;
-                velX = (Math.random() - 0.5) * cfg.SWIM_SPEED * 0.5;
-                velY = -cfg.SWIM_SPEED;
+                velX = (Math.random() - 0.5) * swimSpeed * 0.5;
+                velY = -swimSpeed;
                 break;
         }
 
@@ -1252,7 +1583,7 @@ const PufferFishManager = {
      */
     update(player, camera) {
         // Try to spawn new pufferfish
-        this.trySpawn(camera);
+        this.trySpawn(camera, player);
 
         // Update existing pufferfish
         for (let i = this.pufferfish.length - 1; i >= 0; i--) {
@@ -1285,33 +1616,704 @@ const PufferFishManager = {
 };
 
 // =============================================================================
-// WORLD RENDERER (Nine-Slice Animated Background)
+// SPIKE PROJECTILE SYSTEM
 // =============================================================================
 
 /**
- * Renders the underwater world background using nine-slice scaling
- * with animated sprite frames
+ * Spike projectile launched by pufferfish
  */
-const WorldRenderer = {
-    // Animation state
-    animationFrame: 0,
-    currentFrame: 0,
+class Spike {
+    constructor(x, y, angle) {
+        this.x = x;
+        this.y = y;
+
+        // Calculate velocity from angle
+        this.velocityX = Math.cos(angle) * CONFIG.SPIKE.SPEED;
+        this.velocityY = Math.sin(angle) * CONFIG.SPIKE.SPEED;
+
+        // Dimensions
+        this.width = CONFIG.SPIKE.WIDTH;
+        this.height = CONFIG.SPIKE.HEIGHT;
+
+        // Rotation matches launch angle (+ 90 degrees clockwise)
+        this.rotation = angle + Math.PI / 2;
+
+        // Lifetime tracking
+        this.spawnTime = Date.now();
+        this.shouldRemove = false;
+    }
 
     /**
-     * Draw the animated nine-slice background
+     * Update spike position
+     */
+    update() {
+        // Move spike
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        // Check lifetime
+        if (Date.now() - this.spawnTime > CONFIG.SPIKE.LIFETIME) {
+            this.shouldRemove = true;
+        }
+
+        // Remove if way offscreen
+        const margin = 200;
+        if (this.x < -margin || this.x > CONFIG.WORLD_WIDTH + margin ||
+            this.y < CONFIG.WORLD_TOP_BOUNDARY - margin || this.y > CONFIG.WORLD_HEIGHT + margin) {
+            this.shouldRemove = true;
+        }
+    }
+
+    /**
+     * Get collision rectangle
+     */
+    getCollisionRect() {
+        return {
+            x: this.x - this.width / 2,
+            y: this.y - this.height / 2,
+            width: this.width,
+            height: this.height
+        };
+    }
+
+    /**
+     * Render the spike
+     */
+    render(ctx, camera) {
+        const screenPos = camera.worldToScreen(this.x, this.y);
+        const sprite = SpriteLoader.get('spike');
+
+        ctx.save();
+        ctx.translate(screenPos.x, screenPos.y);
+        ctx.rotate(this.rotation);
+
+        if (sprite) {
+            ctx.drawImage(
+                sprite,
+                0, 0,
+                CONFIG.SPIKE.SPRITE_WIDTH, CONFIG.SPIKE.SPRITE_HEIGHT,
+                -this.width / 2, -this.height / 2,
+                this.width, this.height
+            );
+        } else {
+            // Fallback: draw a triangle
+            ctx.fillStyle = '#ff6600';
+            ctx.beginPath();
+            ctx.moveTo(this.width / 2, 0);
+            ctx.lineTo(-this.width / 2, -this.height / 2);
+            ctx.lineTo(-this.width / 2, this.height / 2);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+}
+
+/**
+ * Manages all spike projectiles
+ */
+const SpikeManager = {
+    spikes: [],
+
+    /**
+     * Launch spikes in a circle from a position
+     * @param {number} x - Center X position
+     * @param {number} y - Center Y position
+     */
+    launchFromPosition(x, y) {
+        const count = CONFIG.SPIKE.COUNT;
+        for (let i = 0; i < count; i++) {
+            const angle = (i / count) * Math.PI * 2;  // Evenly distributed around circle
+            this.spikes.push(new Spike(x, y, angle));
+        }
+    },
+
+    /**
+     * Update all spikes and check player collision
+     * @param {Player} player - For collision detection
+     * @param {ParticleSystem} particles - For damage effects
+     */
+    update(player, particles) {
+        for (let i = this.spikes.length - 1; i >= 0; i--) {
+            const spike = this.spikes[i];
+            spike.update();
+
+            // Check collision with player
+            if (!spike.shouldRemove) {
+                const playerRect = player.getCollisionRect();
+                const spikeRect = spike.getCollisionRect();
+                if (Utils.rectCollision(playerRect, spikeRect)) {
+                    player.takeDamage(CONFIG.SPIKE.DAMAGE, particles);
+                    spike.shouldRemove = true;
+                }
+            }
+
+            // Remove if flagged
+            if (spike.shouldRemove) {
+                this.spikes.splice(i, 1);
+            }
+        }
+    },
+
+    /**
+     * Render all spikes
+     */
+    render(ctx, camera) {
+        for (const spike of this.spikes) {
+            spike.render(ctx, camera);
+        }
+    },
+
+    /**
+     * Reset for game restart
+     */
+    reset() {
+        this.spikes = [];
+    }
+};
+
+// =============================================================================
+// SWORDFISH ENEMY SYSTEM
+// =============================================================================
+
+/**
+ * SwordFish states - complex state machine for side-sliding enemy
+ */
+const SwordFishState = {
+    SLIDING_IN: 'sliding_in',      // Sliding in from side
+    WAITING: 'waiting',            // Waiting before aiming
+    AIMING: 'aiming',              // Playing frames 1->2->3
+    ATTACKING: 'attacking',        // On frame 3, firing bullets
+    REVERSING: 'reversing',        // Playing frames 3->2->1
+    WAITING_EXIT: 'waiting_exit',  // Waiting before sliding out
+    SLIDING_OUT: 'sliding_out',    // Sliding out to side
+    COOLDOWN: 'cooldown',          // Waiting before respawn
+};
+
+/**
+ * SwordFish - Half-fish that slides in from sides, tracks player Y, fires bullets
+ */
+class SwordFish {
+    constructor(side) {
+        const cfg = CONFIG.SWORDFISH;
+
+        // Which side this fish spawns from ('left' or 'right')
+        this.side = side;
+
+        // Position - starts offscreen
+        if (side === 'left') {
+            this.x = -cfg.SPAWN_MARGIN;
+            this.facingRight = true;
+        } else {
+            this.x = CONFIG.WORLD_WIDTH + cfg.SPAWN_MARGIN;
+            this.facingRight = false;
+        }
+        this.y = CONFIG.CANVAS_HEIGHT / 2;  // Will be updated to player Y
+
+        // Target X position when slid in (partial entry)
+        this.targetX = side === 'left' ? cfg.WIDTH / 2 : CONFIG.WORLD_WIDTH - cfg.WIDTH / 2;
+
+        // Dimensions
+        this.width = cfg.WIDTH;
+        this.height = cfg.HEIGHT;
+
+        // State machine
+        this.state = SwordFishState.SLIDING_IN;
+        this.stateEndTime = Date.now() + this.randomRange(cfg.SLIDE_IN_MIN, cfg.SLIDE_IN_MAX);
+
+        // Animation
+        this.currentFrame = 0;  // 0, 1, or 2 (frames 1, 2, 3 in spec)
+        this.animationTimer = 0;
+
+        // Attack timing
+        this.nextFireTime = 0;
+
+        // Mark for cleanup
+        this.shouldRemove = false;
+
+        // Play slide in sound
+        AudioManager.playSFX('SLIDE_IN');
+    }
+
+    /**
+     * Get random value in range
+     */
+    randomRange(min, max) {
+        return min + Math.random() * (max - min);
+    }
+
+    /**
+     * Update swordfish state and position
+     */
+    update(player, camera) {
+        const cfg = CONFIG.SWORDFISH;
+        const now = Date.now();
+
+        // Always follow player Y position (smoothly)
+        const targetY = player.y - camera.y + CONFIG.CANVAS_HEIGHT / 2;
+        this.y = Utils.lerp(this.y, player.y, cfg.Y_FOLLOW_SPEED);
+
+        // Clamp Y to stay on screen (with margin)
+        const margin = this.height;
+        const visibleTop = camera.y + margin;
+        const visibleBottom = camera.y + CONFIG.CANVAS_HEIGHT - margin;
+        this.y = Utils.clamp(this.y, visibleTop, visibleBottom);
+
+        switch (this.state) {
+            case SwordFishState.SLIDING_IN:
+                // Slide toward target X
+                if (this.side === 'left') {
+                    this.x += cfg.SLIDE_SPEED;
+                    if (this.x >= this.targetX || now >= this.stateEndTime) {
+                        this.x = this.targetX;
+                        this.state = SwordFishState.WAITING;
+                        this.stateEndTime = now + this.randomRange(cfg.WAIT_BEFORE_AIM_MIN, cfg.WAIT_BEFORE_AIM_MAX);
+                    }
+                } else {
+                    this.x -= cfg.SLIDE_SPEED;
+                    if (this.x <= this.targetX || now >= this.stateEndTime) {
+                        this.x = this.targetX;
+                        this.state = SwordFishState.WAITING;
+                        this.stateEndTime = now + this.randomRange(cfg.WAIT_BEFORE_AIM_MIN, cfg.WAIT_BEFORE_AIM_MAX);
+                    }
+                }
+                this.currentFrame = 0;
+                break;
+
+            case SwordFishState.WAITING:
+                // Wait on frame 0
+                this.currentFrame = 0;
+                if (now >= this.stateEndTime) {
+                    this.state = SwordFishState.AIMING;
+                    this.animationTimer = 0;
+                }
+                break;
+
+            case SwordFishState.AIMING:
+                // Animate frames 0->1->2
+                this.animationTimer += 0.1;  // Speed of frame transition
+                if (this.animationTimer >= 1 && this.currentFrame < 2) {
+                    this.currentFrame++;
+                    this.animationTimer = 0;
+                }
+                if (this.currentFrame >= 2) {
+                    this.currentFrame = 2;
+                    this.state = SwordFishState.ATTACKING;
+                    this.stateEndTime = now + cfg.ATTACK_DURATION;
+                    this.nextFireTime = now + this.randomRange(cfg.FIRE_INTERVAL_MIN, cfg.FIRE_INTERVAL_MAX);
+                }
+                break;
+
+            case SwordFishState.ATTACKING:
+                // Stay on frame 2, fire bullets periodically
+                this.currentFrame = 2;
+
+                // Fire bullet
+                if (now >= this.nextFireTime) {
+                    this.fireBullet(player);
+                    this.nextFireTime = now + this.randomRange(cfg.FIRE_INTERVAL_MIN, cfg.FIRE_INTERVAL_MAX);
+                }
+
+                // End attack phase
+                if (now >= this.stateEndTime) {
+                    this.state = SwordFishState.REVERSING;
+                    this.animationTimer = 0;
+                }
+                break;
+
+            case SwordFishState.REVERSING:
+                // Animate frames 2->1->0
+                this.animationTimer += 0.1;
+                if (this.animationTimer >= 1 && this.currentFrame > 0) {
+                    this.currentFrame--;
+                    this.animationTimer = 0;
+                }
+                if (this.currentFrame <= 0) {
+                    this.currentFrame = 0;
+                    this.state = SwordFishState.WAITING_EXIT;
+                    this.stateEndTime = now + this.randomRange(cfg.WAIT_BEFORE_EXIT_MIN, cfg.WAIT_BEFORE_EXIT_MAX);
+                }
+                break;
+
+            case SwordFishState.WAITING_EXIT:
+                // Wait on frame 0
+                this.currentFrame = 0;
+                if (now >= this.stateEndTime) {
+                    this.state = SwordFishState.SLIDING_OUT;
+                    this.stateEndTime = now + this.randomRange(cfg.SLIDE_OUT_MIN, cfg.SLIDE_OUT_MAX);
+                    AudioManager.playSFX('SLIDE_OUT');
+                }
+                break;
+
+            case SwordFishState.SLIDING_OUT:
+                // Slide back offscreen
+                if (this.side === 'left') {
+                    this.x -= cfg.SLIDE_SPEED;
+                    if (this.x <= -cfg.SPAWN_MARGIN || now >= this.stateEndTime) {
+                        this.state = SwordFishState.COOLDOWN;
+                        this.stateEndTime = now + this.randomRange(cfg.RESPAWN_DELAY_MIN, cfg.RESPAWN_DELAY_MAX);
+                    }
+                } else {
+                    this.x += cfg.SLIDE_SPEED;
+                    if (this.x >= CONFIG.WORLD_WIDTH + cfg.SPAWN_MARGIN || now >= this.stateEndTime) {
+                        this.state = SwordFishState.COOLDOWN;
+                        this.stateEndTime = now + this.randomRange(cfg.RESPAWN_DELAY_MIN, cfg.RESPAWN_DELAY_MAX);
+                    }
+                }
+                this.currentFrame = 0;
+                break;
+
+            case SwordFishState.COOLDOWN:
+                // Wait offscreen, then mark for respawn
+                if (now >= this.stateEndTime) {
+                    this.shouldRemove = true;  // Manager will create new one
+                }
+                break;
+        }
+    }
+
+    /**
+     * Fire a bullet toward the player
+     */
+    fireBullet(player) {
+        // Calculate bullet spawn position (at the "nose" of the fish)
+        const bulletX = this.side === 'left' ? this.x + this.width / 2 : this.x - this.width / 2;
+        const bulletY = this.y;
+
+        // Calculate direction to player
+        const dx = player.x - bulletX;
+        const dy = player.y - bulletY;
+        const angle = Math.atan2(dy, dx);
+
+        SwordFishBulletManager.spawn(bulletX, bulletY, angle);
+
+        // Play bullet fire sound
+        AudioManager.playSFX('BULLET_FIRE');
+    }
+
+    /**
+     * Get collision rectangle
+     */
+    getCollisionRect() {
+        return {
+            x: this.x - this.width / 2,
+            y: this.y - this.height / 2,
+            width: this.width,
+            height: this.height
+        };
+    }
+
+    /**
+     * Check if fish is in a state where it can damage player
+     */
+    isDangerous() {
+        return this.state !== SwordFishState.COOLDOWN &&
+               this.state !== SwordFishState.SLIDING_OUT &&
+               this.x > 0 && this.x < CONFIG.WORLD_WIDTH;
+    }
+
+    /**
+     * Render the swordfish
+     */
+    render(ctx, camera) {
+        // Don't render if offscreen in cooldown
+        if (this.state === SwordFishState.COOLDOWN) return;
+
+        const screenPos = camera.worldToScreen(this.x, this.y);
+        const sprite = SpriteLoader.get('swordfish');
+        const cfg = CONFIG.SWORDFISH;
+
+        ctx.save();
+        ctx.translate(screenPos.x, screenPos.y);
+
+        // Flip horizontally based on which side it's on
+        // Sprite faces right by default
+        if (!this.facingRight) {
+            ctx.scale(-1, 1);
+        }
+
+        if (sprite) {
+            const srcX = this.currentFrame * cfg.SPRITE_FRAME_WIDTH;
+
+            ctx.drawImage(
+                sprite,
+                srcX, 0,
+                cfg.SPRITE_FRAME_WIDTH, cfg.SPRITE_FRAME_HEIGHT,
+                -this.width / 2, -this.height / 2,
+                this.width, this.height
+            );
+        } else {
+            // Fallback rectangle
+            ctx.fillStyle = '#6688aa';
+            ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+        }
+
+        ctx.restore();
+    }
+}
+
+/**
+ * SwordFish bullet projectile
+ */
+class SwordFishBullet {
+    constructor(x, y, angle) {
+        this.x = x;
+        this.y = y;
+
+        const cfg = CONFIG.SWORDFISH_BULLET;
+        this.velocityX = Math.cos(angle) * cfg.SPEED;
+        this.velocityY = Math.sin(angle) * cfg.SPEED;
+
+        this.width = cfg.WIDTH;
+        this.height = cfg.HEIGHT;
+
+        this.spawnTime = Date.now();
+        this.shouldRemove = false;
+    }
+
+    update() {
+        // Move bullet
+        this.x += this.velocityX;
+        this.y += this.velocityY;
+
+        // Check lifetime
+        if (Date.now() - this.spawnTime > CONFIG.SWORDFISH_BULLET.LIFETIME) {
+            this.shouldRemove = true;
+        }
+
+        // Remove if way offscreen
+        const margin = 200;
+        if (this.x < -margin || this.x > CONFIG.WORLD_WIDTH + margin ||
+            this.y < CONFIG.WORLD_TOP_BOUNDARY - margin || this.y > CONFIG.WORLD_HEIGHT + margin) {
+            this.shouldRemove = true;
+        }
+    }
+
+    getCollisionRect() {
+        return {
+            x: this.x - this.width / 2,
+            y: this.y - this.height / 2,
+            width: this.width,
+            height: this.height
+        };
+    }
+
+    render(ctx, camera) {
+        const screenPos = camera.worldToScreen(this.x, this.y);
+        const sprite = SpriteLoader.get('bullet');
+        const cfg = CONFIG.SWORDFISH_BULLET;
+
+        ctx.save();
+        ctx.translate(screenPos.x, screenPos.y);
+
+        if (sprite) {
+            ctx.drawImage(
+                sprite,
+                0, 0,
+                cfg.SPRITE_WIDTH, cfg.SPRITE_HEIGHT,
+                -this.width / 2, -this.height / 2,
+                this.width, this.height
+            );
+        } else {
+            // Fallback circle
+            ctx.fillStyle = '#ffaa00';
+            ctx.beginPath();
+            ctx.arc(0, 0, this.width / 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+}
+
+/**
+ * Manages SwordFish bullets
+ */
+const SwordFishBulletManager = {
+    bullets: [],
+
+    spawn(x, y, angle) {
+        this.bullets.push(new SwordFishBullet(x, y, angle));
+    },
+
+    update(player, particles) {
+        for (let i = this.bullets.length - 1; i >= 0; i--) {
+            const bullet = this.bullets[i];
+            bullet.update();
+
+            // Check collision with player
+            if (!bullet.shouldRemove) {
+                const playerRect = player.getCollisionRect();
+                const bulletRect = bullet.getCollisionRect();
+                if (Utils.rectCollision(playerRect, bulletRect)) {
+                    player.takeDamage(CONFIG.SWORDFISH_BULLET.DAMAGE, particles);
+                    bullet.shouldRemove = true;
+                }
+            }
+
+            // Remove if flagged
+            if (bullet.shouldRemove) {
+                this.bullets.splice(i, 1);
+            }
+        }
+    },
+
+    render(ctx, camera) {
+        for (const bullet of this.bullets) {
+            bullet.render(ctx, camera);
+        }
+    },
+
+    reset() {
+        this.bullets = [];
+    }
+};
+
+/**
+ * Manages SwordFish spawning and tracking
+ * Max 2 swordfish at a time (one per side)
+ */
+const SwordFishManager = {
+    swordfish: [],
+    leftSlotActive: false,
+    rightSlotActive: false,
+    leftRespawnTime: 0,
+    rightRespawnTime: 0,
+
+    /**
+     * Try to spawn swordfish if slots are available and depth is sufficient
+     */
+    trySpawn(camera, player) {
+        const cfg = CONFIG.SWORDFISH;
+        const now = Date.now();
+
+        // Check if player is deep enough
+        const playerDepth = player.y - CONFIG.WORLD_TOP_BOUNDARY;
+        if (playerDepth < cfg.MIN_DEPTH) return;
+
+        // Try to spawn left swordfish
+        if (!this.leftSlotActive && now >= this.leftRespawnTime) {
+            this.swordfish.push(new SwordFish('left'));
+            this.leftSlotActive = true;
+        }
+
+        // Try to spawn right swordfish
+        if (!this.rightSlotActive && now >= this.rightRespawnTime) {
+            this.swordfish.push(new SwordFish('right'));
+            this.rightSlotActive = true;
+        }
+    },
+
+    update(player, camera, particles) {
+        // Try to spawn new swordfish
+        this.trySpawn(camera, player);
+
+        // Update existing swordfish
+        for (let i = this.swordfish.length - 1; i >= 0; i--) {
+            const fish = this.swordfish[i];
+            fish.update(player, camera);
+
+            // Check body collision with player
+            if (fish.isDangerous()) {
+                const playerRect = player.getCollisionRect();
+                const fishRect = fish.getCollisionRect();
+                if (Utils.rectCollision(playerRect, fishRect)) {
+                    player.takeDamage(CONFIG.SWORDFISH.CONTACT_DAMAGE, particles);
+                }
+            }
+
+            // Remove if flagged
+            if (fish.shouldRemove) {
+                // Free up the slot and set respawn timer
+                if (fish.side === 'left') {
+                    this.leftSlotActive = false;
+                    this.leftRespawnTime = Date.now();  // Can spawn immediately after cooldown
+                } else {
+                    this.rightSlotActive = false;
+                    this.rightRespawnTime = Date.now();
+                }
+                this.swordfish.splice(i, 1);
+            }
+        }
+
+        // Update bullets
+        SwordFishBulletManager.update(player, particles);
+    },
+
+    render(ctx, camera) {
+        for (const fish of this.swordfish) {
+            fish.render(ctx, camera);
+        }
+        SwordFishBulletManager.render(ctx, camera);
+    },
+
+    reset() {
+        this.swordfish = [];
+        this.leftSlotActive = false;
+        this.rightSlotActive = false;
+        this.leftRespawnTime = 0;
+        this.rightRespawnTime = 0;
+        SwordFishBulletManager.reset();
+    }
+};
+
+// =============================================================================
+// WORLD RENDERER (Tileable Background with Depth Zones)
+// =============================================================================
+
+/**
+ * Renders the underwater world background using tileable sprites
+ * with depth-based darkness zones
+ */
+const WorldRenderer = {
+    // Cache for randomized tile patterns per row
+    rowTileCache: {},
+
+    /**
+     * Get the tile group (0, 1, or 2) based on depth
+     * Group 0: Frames 0-2 (light/shallow)
+     * Group 1: Frames 3-5 (medium)
+     * Group 2: Frames 6-8 (dark/deep)
+     */
+    getDepthGroup(worldY) {
+        const depth = worldY - CONFIG.WORLD_TOP_BOUNDARY;
+        const zoneHeight = CONFIG.BACKGROUND.DEPTH_ZONE_HEIGHT * 10; // 300m = 3000 pixels
+        const group = Math.floor(depth / zoneHeight);
+        return Utils.clamp(group, 0, 2);
+    },
+
+    /**
+     * Get a random tile index (0, 1, or 2) for a specific row
+     * Caches the pattern so it stays consistent
+     */
+    getTileForRow(rowIndex, colIndex) {
+        const cacheKey = `${rowIndex}_${colIndex}`;
+        if (this.rowTileCache[cacheKey] === undefined) {
+            // Use a seeded random based on position for consistency
+            const seed = rowIndex * 1000 + colIndex;
+            this.rowTileCache[cacheKey] = Math.floor(this.seededRandom(seed) * 3);
+        }
+        return this.rowTileCache[cacheKey];
+    },
+
+    /**
+     * Simple seeded random number generator
+     */
+    seededRandom(seed) {
+        const x = Math.sin(seed * 12.9898) * 43758.5453;
+        return x - Math.floor(x);
+    },
+
+    /**
+     * Draw the tiled background with depth zones
      */
     render(ctx, camera) {
         const sprite = SpriteLoader.get('background');
 
-        // Update animation
-        this.animationFrame += CONFIG.BACKGROUND.ANIMATION_SPEED;
-        this.currentFrame = Math.floor(this.animationFrame) % CONFIG.BACKGROUND.FRAMES;
-
         if (sprite) {
-            // Draw nine-slice tiled background
-            this.drawNineSliceBackground(ctx, sprite, camera);
+            this.drawTiledBackground(ctx, sprite, camera);
         } else {
-            // Fallback: draw gradient if sprite not loaded
             this.drawFallbackGradient(ctx, camera);
         }
 
@@ -1320,160 +2322,45 @@ const WorldRenderer = {
     },
 
     /**
-     * Draw the background using nine-slice scaling and tiling
-     * Nine-slice divides the sprite into 9 regions:
-     * - 4 corners (don't scale)
-     * - 4 edges (scale in one direction)
-     * - 1 center (tiles to fill)
+     * Draw the tileable background
      */
-    drawNineSliceBackground(ctx, sprite, camera) {
+    drawTiledBackground(ctx, sprite, camera) {
         const cfg = CONFIG.BACKGROUND;
-        const frameX = this.currentFrame * cfg.FRAME_WIDTH;
-        const border = cfg.BORDER;
+        const tileSize = cfg.TILE_SIZE;
         const scale = cfg.TILE_SCALE;
-        const scaledBorder = border * scale;
+        const renderedSize = tileSize * scale;  // 16 * 3 = 48px
 
-        // Source regions (from sprite)
-        const srcW = cfg.FRAME_WIDTH;
-        const srcH = cfg.FRAME_HEIGHT;
-        const srcCenter = srcW - border * 2;
+        // Calculate visible tile range
+        const startRow = Math.floor(camera.y / renderedSize);
+        const endRow = Math.ceil((camera.y + CONFIG.CANVAS_HEIGHT) / renderedSize);
+        const startCol = 0;
+        const endCol = Math.ceil(CONFIG.CANVAS_WIDTH / renderedSize);
 
-        // Destination size
-        const destW = CONFIG.CANVAS_WIDTH;
-        const destH = CONFIG.CANVAS_HEIGHT;
-        const destCenterW = destW - scaledBorder * 2;
-        const destCenterH = destH - scaledBorder * 2;
+        // Draw each visible tile
+        for (let row = startRow; row <= endRow; row++) {
+            const worldY = row * renderedSize;
+            // Round to integers and add 1px overlap to prevent subpixel gaps
+            const screenY = Math.floor(worldY - camera.y);
+            const depthGroup = this.getDepthGroup(worldY);
 
-        // Calculate parallax offset for tiling (subtle movement as camera moves)
-        const tileSize = srcCenter * scale;
-        const offsetX = (camera.y * 0.1) % tileSize;
-        const offsetY = (camera.y * 0.3) % tileSize;
+            for (let col = startCol; col <= endCol; col++) {
+                const screenX = Math.floor(col * renderedSize);
 
-        // Draw the 9 regions
+                // Get random tile variant (0, 1, or 2) for this position
+                const tileVariant = this.getTileForRow(row, col);
 
-        // 1. Top-left corner
-        ctx.drawImage(sprite,
-            frameX, 0, border, border,  // source
-            0, 0, scaledBorder, scaledBorder  // dest
-        );
+                // Calculate frame index: group * 3 + variant
+                const frameIndex = depthGroup * 3 + tileVariant;
+                const srcX = frameIndex * tileSize;
 
-        // 2. Top-right corner
-        ctx.drawImage(sprite,
-            frameX + srcW - border, 0, border, border,
-            destW - scaledBorder, 0, scaledBorder, scaledBorder
-        );
-
-        // 3. Bottom-left corner
-        ctx.drawImage(sprite,
-            frameX, srcH - border, border, border,
-            0, destH - scaledBorder, scaledBorder, scaledBorder
-        );
-
-        // 4. Bottom-right corner
-        ctx.drawImage(sprite,
-            frameX + srcW - border, srcH - border, border, border,
-            destW - scaledBorder, destH - scaledBorder, scaledBorder, scaledBorder
-        );
-
-        // 5. Top edge (tile horizontally)
-        this.tileHorizontal(ctx, sprite,
-            frameX + border, 0, srcCenter, border,  // source
-            scaledBorder, 0, destCenterW, scaledBorder,  // dest
-            offsetX
-        );
-
-        // 6. Bottom edge (tile horizontally)
-        this.tileHorizontal(ctx, sprite,
-            frameX + border, srcH - border, srcCenter, border,
-            scaledBorder, destH - scaledBorder, destCenterW, scaledBorder,
-            offsetX
-        );
-
-        // 7. Left edge (tile vertically)
-        this.tileVertical(ctx, sprite,
-            frameX, border, border, srcCenter,
-            0, scaledBorder, scaledBorder, destCenterH,
-            offsetY
-        );
-
-        // 8. Right edge (tile vertically)
-        this.tileVertical(ctx, sprite,
-            frameX + srcW - border, border, border, srcCenter,
-            destW - scaledBorder, scaledBorder, scaledBorder, destCenterH,
-            offsetY
-        );
-
-        // 9. Center (tile both directions)
-        this.tileCenter(ctx, sprite,
-            frameX + border, border, srcCenter, srcCenter,
-            scaledBorder, scaledBorder, destCenterW, destCenterH,
-            offsetX, offsetY
-        );
-    },
-
-    /**
-     * Tile a sprite region horizontally
-     */
-    tileHorizontal(ctx, sprite, srcX, srcY, srcW, srcH, destX, destY, destW, destH, offset) {
-        const scale = CONFIG.BACKGROUND.TILE_SCALE;
-        const tileW = srcW * scale;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(destX, destY, destW, destH);
-        ctx.clip();
-
-        const startX = destX - (offset % tileW);
-        for (let x = startX; x < destX + destW; x += tileW) {
-            ctx.drawImage(sprite, srcX, srcY, srcW, srcH, x, destY, tileW, destH);
-        }
-
-        ctx.restore();
-    },
-
-    /**
-     * Tile a sprite region vertically
-     */
-    tileVertical(ctx, sprite, srcX, srcY, srcW, srcH, destX, destY, destW, destH, offset) {
-        const scale = CONFIG.BACKGROUND.TILE_SCALE;
-        const tileH = srcH * scale;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(destX, destY, destW, destH);
-        ctx.clip();
-
-        const startY = destY - (offset % tileH);
-        for (let y = startY; y < destY + destH; y += tileH) {
-            ctx.drawImage(sprite, srcX, srcY, srcW, srcH, destX, y, destW, tileH);
-        }
-
-        ctx.restore();
-    },
-
-    /**
-     * Tile a sprite region in both directions
-     */
-    tileCenter(ctx, sprite, srcX, srcY, srcW, srcH, destX, destY, destW, destH, offsetX, offsetY) {
-        const scale = CONFIG.BACKGROUND.TILE_SCALE;
-        const tileW = srcW * scale;
-        const tileH = srcH * scale;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(destX, destY, destW, destH);
-        ctx.clip();
-
-        const startX = destX - (offsetX % tileW);
-        const startY = destY - (offsetY % tileH);
-
-        for (let y = startY; y < destY + destH; y += tileH) {
-            for (let x = startX; x < destX + destW; x += tileW) {
-                ctx.drawImage(sprite, srcX, srcY, srcW, srcH, x, y, tileW, tileH);
+                // Draw with 1px overlap to eliminate subpixel gaps
+                ctx.drawImage(
+                    sprite,
+                    srcX, 0, tileSize, tileSize,  // source
+                    screenX, screenY, renderedSize + 1, renderedSize + 1  // dest with overlap
+                );
             }
         }
-
-        ctx.restore();
     },
 
     /**
@@ -1526,7 +2413,7 @@ const WorldRenderer = {
      */
     drawDepthMarkers(ctx, camera) {
         ctx.fillStyle = 'rgba(100, 150, 200, 0.5)';
-        ctx.font = '12px Courier New';
+        ctx.font = '12px BoldPixels, Courier New';
 
         const markerInterval = 500;
         const startMarker = Math.floor(camera.y / markerInterval) * markerInterval;
@@ -1540,6 +2427,308 @@ const WorldRenderer = {
                 ctx.fillRect(0, screenY, 5, 1);
             }
         }
+    },
+
+    /**
+     * Reset tile cache (for new game)
+     */
+    reset() {
+        this.rowTileCache = {};
+    }
+};
+
+// =============================================================================
+// BUBBLE DECORATION SYSTEM
+// =============================================================================
+
+/**
+ * Decorative bubble that floats upward
+ */
+class Bubble {
+    constructor(x, y, frameIndex) {
+        this.x = x;
+        this.startX = x;  // For wobble calculation
+        this.y = y;
+        this.frameIndex = frameIndex;  // 9, 10, or 11
+
+        const cfg = CONFIG.BUBBLE;
+        this.speed = cfg.MIN_SPEED + Math.random() * (cfg.MAX_SPEED - cfg.MIN_SPEED);
+        this.wobbleOffset = Math.random() * Math.PI * 2;  // Random phase
+        this.time = 0;
+        this.shouldRemove = false;
+
+        // Size with slight variation
+        this.scale = cfg.SCALE * (0.8 + Math.random() * 0.4);
+    }
+
+    update() {
+        const cfg = CONFIG.BUBBLE;
+
+        // Move upward
+        this.y -= this.speed;
+
+        // Wobble horizontally
+        this.time += cfg.WOBBLE_SPEED;
+        this.x = this.startX + Math.sin(this.time + this.wobbleOffset) * cfg.WOBBLE_AMOUNT;
+
+        // Remove when off screen (above camera)
+        // Will be checked in BubbleManager based on camera position
+    }
+
+    render(ctx, camera) {
+        const screenY = this.y - camera.y;
+
+        // Only render if on screen
+        if (screenY < -50 || screenY > CONFIG.CANVAS_HEIGHT + 50) {
+            return;
+        }
+
+        const sprite = SpriteLoader.get('background');
+        if (!sprite) return;
+
+        const cfg = CONFIG.BUBBLE;
+        const tileSize = CONFIG.BACKGROUND.TILE_SIZE;
+        const srcX = this.frameIndex * tileSize;
+        const size = tileSize * this.scale;
+
+        ctx.save();
+        ctx.globalAlpha = 0.7;  // Slightly transparent
+
+        ctx.drawImage(
+            sprite,
+            srcX, 0, tileSize, tileSize,
+            this.x - size / 2, screenY - size / 2, size, size
+        );
+
+        ctx.restore();
+    }
+}
+
+/**
+ * Manages decorative bubbles
+ */
+const BubbleManager = {
+    bubbles: [],
+    lastSpawnTime: 0,
+
+    /**
+     * Try to spawn a new bubble from bottom of visible area
+     */
+    trySpawn(camera) {
+        const cfg = CONFIG.BUBBLE;
+        const now = Date.now();
+
+        if (now - this.lastSpawnTime < cfg.SPAWN_INTERVAL) return;
+        if (this.bubbles.length >= cfg.MAX_COUNT) return;
+
+        // Random chance to spawn
+        if (Math.random() > 0.4) return;
+
+        this.lastSpawnTime = now;
+
+        // Spawn at bottom of visible area
+        const x = Math.random() * CONFIG.CANVAS_WIDTH;
+        const y = camera.y + CONFIG.CANVAS_HEIGHT + 20;
+
+        // Random bubble frame (9, 10, or 11)
+        const frameIndex = 9 + Math.floor(Math.random() * 3);
+
+        this.bubbles.push(new Bubble(x, y, frameIndex));
+    },
+
+    /**
+     * Update all bubbles
+     */
+    update(camera) {
+        this.trySpawn(camera);
+
+        for (let i = this.bubbles.length - 1; i >= 0; i--) {
+            const bubble = this.bubbles[i];
+            bubble.update();
+
+            // Remove if above visible area
+            if (bubble.y < camera.y - 100) {
+                this.bubbles.splice(i, 1);
+            }
+        }
+    },
+
+    /**
+     * Render all bubbles
+     */
+    render(ctx, camera) {
+        for (const bubble of this.bubbles) {
+            bubble.render(ctx, camera);
+        }
+    },
+
+    /**
+     * Reset for new game
+     */
+    reset() {
+        this.bubbles = [];
+        this.lastSpawnTime = 0;
+    }
+};
+
+// =============================================================================
+// UNDERWATER POST-PROCESSING EFFECTS
+// =============================================================================
+
+const UnderwaterEffects = {
+    time: 0,
+    floatingParticles: [],
+    initialized: false,
+
+    init() {
+        if (this.initialized) return;
+
+        // Initialize floating particles (plankton/dust)
+        const cfg = CONFIG.UNDERWATER;
+        for (let i = 0; i < cfg.PARTICLE_COUNT; i++) {
+            this.floatingParticles.push({
+                x: Math.random() * CONFIG.CANVAS_WIDTH,
+                y: Math.random() * CONFIG.CANVAS_HEIGHT,
+                size: cfg.PARTICLE_SIZE * (0.5 + Math.random()),
+                speedX: (Math.random() - 0.5) * 0.3,
+                speedY: (Math.random() - 0.5) * 0.2,
+                opacity: cfg.PARTICLE_OPACITY * (0.3 + Math.random() * 0.7),
+                wobbleOffset: Math.random() * Math.PI * 2,
+            });
+        }
+        this.initialized = true;
+    },
+
+    update(deltaTime) {
+        this.time += deltaTime;
+
+        // Update floating particles
+        for (const p of this.floatingParticles) {
+            // Gentle drifting motion
+            p.x += p.speedX + Math.sin(this.time * 0.001 + p.wobbleOffset) * 0.1;
+            p.y += p.speedY + Math.cos(this.time * 0.0008 + p.wobbleOffset) * 0.08;
+
+            // Wrap around screen
+            if (p.x < 0) p.x = CONFIG.CANVAS_WIDTH;
+            if (p.x > CONFIG.CANVAS_WIDTH) p.x = 0;
+            if (p.y < 0) p.y = CONFIG.CANVAS_HEIGHT;
+            if (p.y > CONFIG.CANVAS_HEIGHT) p.y = 0;
+        }
+    },
+
+    render(ctx, camera) {
+        const cfg = CONFIG.UNDERWATER;
+        const depthFactor = Math.min(1, camera.y / (CONFIG.WORLD_HEIGHT * 0.5));
+
+        // Draw caustic light rays from above
+        this.drawCaustics(ctx, depthFactor);
+
+        // Draw floating particles
+        this.drawFloatingParticles(ctx);
+
+        // Draw blue tint overlay (stronger at depth)
+        this.drawTintOverlay(ctx, depthFactor);
+
+        // Draw vignette
+        this.drawVignette(ctx, depthFactor);
+    },
+
+    drawCaustics(ctx, depthFactor) {
+        const cfg = CONFIG.UNDERWATER;
+        // Caustics are stronger near surface, fade with depth
+        const causticStrength = cfg.CAUSTIC_OPACITY * (1 - depthFactor * 0.7);
+
+        if (causticStrength < 0.01) return;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = causticStrength;
+
+        // Draw several animated light rays
+        for (let i = 0; i < cfg.CAUSTIC_COUNT; i++) {
+            const baseX = (i / cfg.CAUSTIC_COUNT) * CONFIG.CANVAS_WIDTH;
+            const wobble = Math.sin(this.time * cfg.CAUSTIC_SPEED + i * 1.5) * 100;
+            const x = baseX + wobble;
+
+            // Create gradient for light ray
+            const gradient = ctx.createLinearGradient(x, 0, x + 80, CONFIG.CANVAS_HEIGHT);
+            gradient.addColorStop(0, 'rgba(150, 220, 255, 0.8)');
+            gradient.addColorStop(0.3, 'rgba(100, 180, 220, 0.4)');
+            gradient.addColorStop(1, 'rgba(50, 100, 150, 0)');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x + 60 + Math.sin(this.time * 0.001 + i) * 20, 0);
+            ctx.lineTo(x + 150 + wobble * 0.5, CONFIG.CANVAS_HEIGHT);
+            ctx.lineTo(x + 50 + wobble * 0.5, CONFIG.CANVAS_HEIGHT);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        ctx.restore();
+    },
+
+    drawFloatingParticles(ctx) {
+        ctx.save();
+        ctx.fillStyle = '#aaddff';
+
+        for (const p of this.floatingParticles) {
+            ctx.globalAlpha = p.opacity;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    },
+
+    drawTintOverlay(ctx, depthFactor) {
+        const cfg = CONFIG.UNDERWATER;
+
+        // Blend between surface and deep tint based on depth
+        ctx.save();
+
+        // Surface tint
+        ctx.fillStyle = cfg.TINT_COLOR;
+        ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+
+        // Additional deep tint
+        if (depthFactor > 0.1) {
+            ctx.globalAlpha = depthFactor;
+            ctx.fillStyle = cfg.TINT_DEEP_COLOR;
+            ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        }
+
+        ctx.restore();
+    },
+
+    drawVignette(ctx, depthFactor) {
+        const cfg = CONFIG.UNDERWATER;
+        const strength = cfg.VIGNETTE_STRENGTH + depthFactor * 0.2;
+
+        const centerX = CONFIG.CANVAS_WIDTH / 2;
+        const centerY = CONFIG.CANVAS_HEIGHT / 2;
+        const radius = Math.max(centerX, centerY) * 1.2;
+
+        const gradient = ctx.createRadialGradient(
+            centerX, centerY, radius * 0.3,
+            centerX, centerY, radius
+        );
+        gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        gradient.addColorStop(0.5, 'rgba(0, 10, 30, 0)');
+        gradient.addColorStop(1, `rgba(0, 10, 30, ${strength})`);
+
+        ctx.save();
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
+        ctx.restore();
+    },
+
+    reset() {
+        this.time = 0;
+        this.floatingParticles = [];
+        this.initialized = false;
     }
 };
 
@@ -1599,6 +2788,8 @@ class Game {
 
         // Initialize systems
         Input.init();
+        AudioManager.init();
+        UnderwaterEffects.init();
 
         // Load sprites
         SpriteLoader.load('player', 'Sprites/Player.png');
@@ -1606,8 +2797,11 @@ class Game {
         SpriteLoader.load('enemy_windup', 'Sprites/enemy_windup.png');
         SpriteLoader.load('enemy_charging', 'Sprites/enemy_charging.png');
         SpriteLoader.load('game_over', 'Sprites/game_over.png');
-        SpriteLoader.load('background', 'Sprites/background.png');
+        SpriteLoader.load('background', 'Sprites/Background.png');
         SpriteLoader.load('pufferfish', 'Sprites/PufferFish.png');
+        SpriteLoader.load('spike', 'Sprites/spike.png');
+        SpriteLoader.load('swordfish', 'Sprites/SwordFish.png');
+        SpriteLoader.load('bullet', 'Sprites/Bullet.png');
 
         // Game objects
         this.camera = new Camera();
@@ -1630,6 +2824,7 @@ class Game {
         this.isGameOver = false;
         this.lastTime = performance.now();
         this.dashKeyWasPressed = false;  // For edge detection
+        this.muteKeyWasPressed = false;  // For mute toggle edge detection
 
         // Start game loop
         this.gameLoop = this.gameLoop.bind(this);
@@ -1677,6 +2872,13 @@ class Game {
         }
         this.dashKeyWasPressed = dashKeyPressed;
 
+        // Handle mute toggle (M key)
+        const muteKeyPressed = Input.keys['KeyM'];
+        if (muteKeyPressed && !this.muteKeyWasPressed) {
+            AudioManager.toggleMute();
+        }
+        this.muteKeyWasPressed = muteKeyPressed;
+
         // Update player
         this.player.update(deltaTime, this.particles);
 
@@ -1691,6 +2893,18 @@ class Game {
 
         // Update pufferfish
         PufferFishManager.update(this.player, this.camera);
+
+        // Update spikes
+        SpikeManager.update(this.player, this.particles);
+
+        // Update swordfish
+        SwordFishManager.update(this.player, this.camera, this.particles);
+
+        // Update decorative bubbles
+        BubbleManager.update(this.camera);
+
+        // Update underwater effects
+        UnderwaterEffects.update(deltaTime);
 
         // Check collision between enemy and player
         this.checkCollisions();
@@ -1730,6 +2944,9 @@ class Game {
         // Store final depth for display
         this.finalDepth = Math.floor((this.player.y - CONFIG.WORLD_TOP_BOUNDARY) / 10);
 
+        // Play death sound
+        AudioManager.playSFX('DEATH');
+
         // Listen for restart
         const restartHandler = (e) => {
             if (e.code === 'KeyR') {
@@ -1768,7 +2985,7 @@ class Game {
             const drawWidth = spriteWidth * scale;
             const drawHeight = spriteHeight * scale;
             const drawX = (CONFIG.CANVAS_WIDTH - drawWidth) / 2;
-            const drawY = (CONFIG.CANVAS_HEIGHT - drawHeight) / 2 - 30;  // Offset up for text below
+            const drawY = 60;  // Position near top center
 
             this.ctx.drawImage(
                 gameOverSprite,
@@ -1779,7 +2996,7 @@ class Game {
 
         // Draw stats below the sprite
         this.ctx.fillStyle = '#88ccff';
-        this.ctx.font = '20px Courier New';
+        this.ctx.font = '20px BoldPixels, Courier New';
         this.ctx.textAlign = 'center';
         this.ctx.fillText(`Final Depth: ${this.finalDepth}m`, CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 + 120);
         this.ctx.fillText('Press R to Restart', CONFIG.CANVAS_WIDTH / 2, CONFIG.CANVAS_HEIGHT / 2 + 160);
@@ -1806,6 +3023,22 @@ class Game {
 
         // Reset pufferfish
         PufferFishManager.reset();
+
+        // Reset spikes
+        SpikeManager.reset();
+
+        // Reset swordfish
+        SwordFishManager.reset();
+
+        // Reset bubbles
+        BubbleManager.reset();
+
+        // Reset world renderer tile cache
+        WorldRenderer.reset();
+
+        // Reset underwater effects and reinitialize
+        UnderwaterEffects.reset();
+        UnderwaterEffects.init();
 
         // Reset camera
         this.camera = new Camera();
@@ -1839,6 +3072,18 @@ class Game {
 
         // Draw pufferfish
         PufferFishManager.render(this.ctx, this.camera);
+
+        // Draw spikes
+        SpikeManager.render(this.ctx, this.camera);
+
+        // Draw swordfish and bullets
+        SwordFishManager.render(this.ctx, this.camera);
+
+        // Draw decorative bubbles (on top of everything for visibility)
+        BubbleManager.render(this.ctx, this.camera);
+
+        // Draw underwater post-processing effects (on top of everything)
+        UnderwaterEffects.render(this.ctx, this.camera);
     }
 }
 

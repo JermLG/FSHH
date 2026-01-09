@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Deep Dive - Underwater Survival</title>
     <style>
+        @font-face {
+            font-family: 'BoldPixels';
+            src: url('fonts/BoldPixels.otf') format('opentype'),
+                 url('fonts/BoldPixels.ttf') format('truetype');
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -30,9 +36,18 @@
             top: 20px;
             left: 20px;
             color: #88ccff;
-            font-family: 'Courier New', monospace;
+            font-family: 'BoldPixels', 'Courier New', monospace;
             font-size: 16px;
             text-shadow: 0 0 10px rgba(0, 150, 255, 0.5);
+        }
+
+        #depth {
+            color: #111111;
+            background: rgba(200, 220, 240, 0.7);
+            padding: 2px 8px;
+            border-radius: 4px;
+            text-shadow: none;
+            margin-top: 4px;
         }
 
         #controls {
@@ -40,7 +55,7 @@
             bottom: 20px;
             left: 20px;
             color: #5588aa;
-            font-family: 'Courier New', monospace;
+            font-family: 'BoldPixels', 'Courier New', monospace;
             font-size: 12px;
         }
     </style>
@@ -53,7 +68,7 @@
         <div id="dashStatus">Dash: Ready</div>
     </div>
     <div id="controls">
-        WASD/Arrows: Move | SPACE: Dash
+        WASD/Arrows: Move | SPACE: Dash | M: Mute
     </div>
     <script src="game.js"></script>
 </body>
